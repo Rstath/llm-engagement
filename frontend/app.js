@@ -88,13 +88,29 @@ function showResumeModalOnce() {
   modal.querySelector('.btn-close').addEventListener('click', close);
   modal.querySelector('.resume-continue').addEventListener('click', close);
 }
+function parseTimestamp(value) {
+  if (!value) return new Date();
+  // Backend timestamps are ISO strings without a timezone on Render. Treat them as UTC
+  // so the UI shows the participant's actual local time.
+  const raw = String(value);
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw);
+  const d = new Date(hasTimezone ? raw : `${raw}Z`);
+  return Number.isNaN(d.getTime()) ? new Date() : d;
+}
 function formatMessageTime(value) {
-  const d = value ? new Date(value) : new Date();
-  if (Number.isNaN(d.getTime())) return '';
+  const d = parseTimestamp(value);
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 function iPhoneStatusTime() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+function syntheticOlderMessage(transcript) {
+  const first = transcript?.[0]?.created_at ? parseTimestamp(transcript[0].created_at) : new Date();
+  const older = new Date(first.getTime() - 1000 * 60 * 60 * 3);
+  return { speaker: 'Agent', text: 'hah ok, we can continue later', created_at: older.toISOString(), synthetic: true };
+}
+function visibleTranscript(transcript) {
+  return [syntheticOlderMessage(transcript), ...(transcript || [])];
 }
 function chatMessageHtml(t) {
   const isHuman = t.speaker === 'Human' || t.speaker === 'user';
@@ -103,7 +119,7 @@ function chatMessageHtml(t) {
   const time = formatMessageTime(t.created_at);
   const meta = `${time}${isHuman ? ' · Delivered' : ''}`;
   const avatar = isHuman ? '' : '<div class="agent-mini-avatar">A</div>';
-  return `<div class="message-row ${cls}">
+  return `<div class="message-row ${cls}${t.synthetic ? ' synthetic' : ''}">
     <div class="message-sender">${label}</div>
     <div class="message-line">${avatar}<div class="bubble ${cls}">${htmlEscape(t.text)}</div></div>
     <div class="message-meta">${htmlEscape(meta)}</div>
@@ -112,6 +128,20 @@ function chatMessageHtml(t) {
 function scrollMessagesToBottom() {
   const messages = document.getElementById('messages');
   if (messages) messages.scrollTop = messages.scrollHeight;
+}
+
+function keepNativeInputVisible() {
+  if (isDesktopDevice() || !window.visualViewport) return;
+  const apply = () => {
+    const keyboard = Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop);
+    document.documentElement.style.setProperty('--keyboard-offset', `${keyboard}px`);
+    setTimeout(scrollMessagesToBottom, 30);
+  };
+  window.visualViewport.removeEventListener('resize', apply);
+  window.visualViewport.removeEventListener('scroll', apply);
+  window.visualViewport.addEventListener('resize', apply);
+  window.visualViewport.addEventListener('scroll', apply);
+  apply();
 }
 
 async function init() {
@@ -353,7 +383,7 @@ async function renderChat(err = '') {
   const pageClass = desktop ? 'chat-page chat-page--desktop' : 'chat-page chat-page--native';
   const shellClass = desktop ? 'phone-shell' : 'native-chat-shell';
   const screenClass = desktop ? 'phone-screen' : 'native-chat-screen';
-  const statusBar = desktop ? `<div class="phone-status-bar"><span>${iPhoneStatusTime()}</span><span class="phone-status-icons"><span class="service">COSMOTE</span><span class="signal">▂▃▅▇</span><span class="wifi">⌁</span><span class="battery"><span class="battery-level"></span></span></span></div>` : '';
+  const statusBar = desktop ? `<div class="phone-status-bar"><span class="phone-clock">${iPhoneStatusTime()}</span><span class="phone-status-icons"><span class="wifi-icon" aria-hidden="true"><span></span><span></span><span></span></span><span class="battery"><span class="battery-level"></span></span></span></div>` : '';
   const inputHtml = done
     ? '<p class="muted chat-complete">Conversation complete.</p>'
     : `<form class="chat-form" id="chatForm"><textarea id="chatText" rows="1" inputmode="text" autocomplete="off" autocapitalize="sentences" placeholder="iMessage"></textarea><button aria-label="Send message" type="submit">↑</button></form>`;
@@ -367,13 +397,19 @@ async function renderChat(err = '') {
           <div class="phone-title">Alex</div>
           <div class="phone-subtitle">Engagement Agent · ${data.turns}/${data.target_total_turns} turns</div>
         </div>
-        <div class="phone-messages" id="messages">${data.transcript.map(chatMessageHtml).join('')}</div>
+        <div class="phone-messages" id="messages">${visibleTranscript(data.transcript).map(chatMessageHtml).join('')}</div>
         ${inputHtml}
       </div>
     </div>
   </div>${err ? errorBox(err) : ''}` + (done ? actions('<button id="finish">Finish experiment</button>') : '');
 
   scrollMessagesToBottom();
+  keepNativeInputVisible();
+  const statusClock = document.querySelector('.phone-clock');
+  if (statusClock) {
+    clearInterval(window.__phoneClockInterval);
+    window.__phoneClockInterval = setInterval(() => { statusClock.textContent = iPhoneStatusTime(); }, 30000);
+  }
   const form = document.getElementById('chatForm');
   const textEl = document.getElementById('chatText');
   const sendMessage = async () => {
@@ -387,8 +423,29 @@ async function renderChat(err = '') {
     scrollMessagesToBottom();
     try {
       const result = await api('/api/chat', { method: 'POST', body: JSON.stringify({ participant_id: state.participant, text }) });
-      if (result.done) { setProgress(await api(`/api/finish/${state.participant}`, { method: 'POST' })); renderDone(); } else renderChat();
-    } catch(e) { renderChat(e); }
+      const latestTranscript = result.transcript || [];
+      const latestTurns = latestTranscript.length;
+      const latestDone = result.done || latestTurns >= data.target_total_turns;
+      const headerSubtitle = document.querySelector('.phone-subtitle');
+      if (headerSubtitle) headerSubtitle.textContent = `Engagement Agent · ${latestTurns}/${data.target_total_turns} turns`;
+      messages.innerHTML = visibleTranscript(latestTranscript).map(chatMessageHtml).join('');
+      scrollMessagesToBottom();
+      if (latestDone) {
+        const formEl = document.getElementById('chatForm');
+        if (formEl) formEl.outerHTML = '<p class="muted chat-complete">Conversation complete.</p>';
+        setProgress(await api(`/api/finish/${state.participant}`, { method: 'POST' }));
+        renderDone();
+      } else {
+        data.transcript = latestTranscript;
+        data.turns = latestTurns;
+        textEl.focus({ preventScroll: true });
+      }
+    } catch(e) {
+      const typing = messages.querySelector('.typing-row');
+      if (typing) typing.remove();
+      messages.insertAdjacentHTML('beforeend', chatMessageHtml({ speaker: 'Agent', text: e.message || String(e), created_at: new Date().toISOString() }));
+      scrollMessagesToBottom();
+    }
   };
   if (form && textEl) {
     form.onsubmit = async (ev) => { ev.preventDefault(); await sendMessage(); };

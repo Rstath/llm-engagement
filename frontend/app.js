@@ -433,10 +433,13 @@ async function renderChat(err = '') {
   const pageClass = desktop ? 'chat-page chat-page--desktop' : 'chat-page chat-page--native';
   const shellClass = desktop ? 'phone-shell' : 'native-chat-shell';
   const screenClass = desktop ? 'phone-screen' : 'native-chat-screen';
-  const statusBar = desktop ? `<div class="phone-status-bar"><span class="phone-clock">${iPhoneStatusTime()}</span><span class="phone-status-icons"><span class="wifi-icon" aria-hidden="true"><span class="wifi-arc wifi-arc-1"></span><span class="wifi-arc wifi-arc-2"></span><span class="wifi-dot"></span></span><span class="battery"><span class="battery-level"></span></span></span></div>` : '';
+  const statusBar = desktop ? `<div class="phone-status-bar"><span class="phone-clock">${iPhoneStatusTime()}</span><span class="phone-status-icons"><span class="wifi-icon" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+    <path d="M12 18a2 2 0 1 0 0 4a2 2 0 0 0 0-4zm0-4c-2.2 0-4.2.8-5.8 2.1l1.4 1.4c1.2-.9 2.7-1.5 4.4-1.5s3.2.5 4.4 1.5l1.4-1.4C16.2 14.8 14.2 14 12 14zm0-4c-3.4 0-6.5 1.2-9 3.3l1.4 1.4C6.5 12.9 9.1 12 12 12s5.5.9 7.6 2.7l1.4-1.4C18.5 11.2 15.4 10 12 10zm0-4C7.5 6 3.4 7.7.1 10.8l1.4 1.4C4.3 9.6 8 8 12 8s7.7 1.6 10.5 4.2l1.4-1.4C20.6 7.7 16.5 6 12 6z"/>
+    </svg></span><span class="battery"><span class="battery-level"></span></span></span></div>` : '';
   const inputHtml = done
     ? '<p class="muted chat-complete">Conversation complete.</p>'
-    : `<form class="chat-form" id="chatForm"><textarea id="chatText" rows="1" inputmode="text" autocomplete="off" autocapitalize="sentences" placeholder="Message"></textarea><button aria-label="Send message" type="submit">↑</button></form>`;
+    : `<form class="chat-form" id="chatForm"><textarea id="chatText" rows="1" inputmode="text" autocomplete="off" autocapitalize="sentences" placeholder="Message"></textarea><button aria-label="Send message" type="submit" class="send-btn"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2L12 18M12 2L6 8M12 2L18 8"/></svg></button></form>`;
 
   app.innerHTML = `<div class="${pageClass}">
     <div class="${shellClass}">

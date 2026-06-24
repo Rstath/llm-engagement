@@ -216,6 +216,14 @@ class TopicsIn(BaseModel): participant_id: str; most_topics: List[str]; least_to
 class ChatIn(BaseModel): participant_id: str; text: str
 class LoginIn(BaseModel): password: str
 
+@app.get("/")
+def root():
+    return {"status": "ok", "app": "LLM Engagement Study API", "docs": "/docs"}
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
+
 @app.get("/api/meta")
 def meta():
     return {"topics": TOPICS, "bfi_items": BFI_ITEMS, "target_total_turns": TARGET_TOTAL_TURNS}
@@ -236,6 +244,28 @@ def consent(data: ConsentIn):
 
 @app.post("/api/pre")
 def pre(data: PreIn):
+    required = [
+        "age_group", "gender", "education", "messaging_app_use",
+        "text_communication_ease_1_5", "message_style_one_two_words",
+        "message_style_single_sentence", "message_style_short_2_3_sentences",
+        "message_style_long_detailed", "used_ai_before",
+    ]
+    missing = [key for key in required if data.answers.get(key) in (None, "")]
+    if data.answers.get("used_ai_before") == "Yes":
+        for key in ["ai_use_general_purpose", "ai_use_specific_purpose"]:
+            if data.answers.get(key) in (None, ""):
+                missing.append(key)
+        emotions = data.answers.get("ai_experience_emotions") or {}
+        for emotion in [
+            "insecure", "helpless", "excluded", "threatened", "critical", "frustrated",
+            "humiliated", "bitter", "hurt", "guilty", "powerless", "lonely",
+            "powerful", "excited", "proud", "hopeful", "startled", "disapproving",
+            "awful", "repelled",
+        ]:
+            if emotions.get(emotion) in (None, ""):
+                missing.append(f"emotion_{emotion}")
+    if missing:
+        raise HTTPException(400, "Please complete all required questions.")
     with connect() as conn:
         conn.execute("UPDATE progress SET pre_json=? WHERE participant_id=?", (jdump(data.answers), data.participant_id)); conn.commit()
     set_step(data.participant_id, "big5")

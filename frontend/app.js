@@ -61,7 +61,7 @@ function detectDevice() {
   if (isMobile) return 'mobile';
   return 'desktop';
 }
-function isDesktopDevice() { return state.device === 'desktop'; }
+function isDesktopDevice() { return state.device === 'desktop' && window.matchMedia('(min-width: 1025px)').matches; }
 function stepLabel(step) {
   return ({ consent: 'the consent form', pre: 'the pre-experiment questionnaire', big5: 'the Big Five Inventory', topics: 'topic selection', topic_preferences: 'topic selection', chat: 'the conversation', done: 'the thank-you page' })[step] || 'where you left off';
 }
@@ -97,14 +97,16 @@ function iPhoneStatusTime() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 function chatMessageHtml(t) {
-  const isHuman = t.speaker === 'Human';
+  const isHuman = t.speaker === 'Human' || t.speaker === 'user';
   const cls = isHuman ? 'Human' : 'Agent';
   const label = isHuman ? 'You' : 'Alex';
   const time = formatMessageTime(t.created_at);
+  const meta = `${time}${isHuman ? ' · Delivered' : ''}`;
+  const avatar = isHuman ? '' : '<div class="agent-mini-avatar">A</div>';
   return `<div class="message-row ${cls}">
     <div class="message-sender">${label}</div>
-    <div class="bubble ${cls}">${htmlEscape(t.text)}</div>
-    <div class="message-meta">${time}${isHuman ? ' · Delivered' : ''}</div>
+    <div class="message-line">${avatar}<div class="bubble ${cls}">${htmlEscape(t.text)}</div></div>
+    <div class="message-meta">${htmlEscape(meta)}</div>
   </div>`;
 }
 function scrollMessagesToBottom() {
@@ -342,21 +344,32 @@ function renderTopicsLeast(most, err = '') {
 }
 
 async function renderChat(err = '') {
-  app.innerHTML = `<h2>Conversation with Alex</h2><p class="muted">Loading chat...</p>`;
+  app.innerHTML = `<p class="muted">Loading chat...</p>`;
   let data;
   try { data = await api(`/api/chat/${state.participant}`); } catch(e) { app.innerHTML = errorBox(e); return; }
+
   const done = data.done || data.turns >= data.target_total_turns;
-  const shellClass = isDesktopDevice() ? 'chat-desktop-shell' : 'chat-native-shell';
-  const statusBar = isDesktopDevice() ? `<div class="iphone-status"><span>${iPhoneStatusTime()}</span><span class="iphone-icons"><span class="signal-bars"><i></i><i></i><i></i><i></i></span><span>Wi‑Fi</span><span class="battery"><span></span></span></span></div>` : '';
+  const desktop = isDesktopDevice();
+  const pageClass = desktop ? 'chat-page chat-page--desktop' : 'chat-page chat-page--native';
+  const shellClass = desktop ? 'phone-shell' : 'native-chat-shell';
+  const screenClass = desktop ? 'phone-screen' : 'native-chat-screen';
+  const statusBar = desktop ? `<div class="phone-status-bar"><span>${iPhoneStatusTime()}</span><span class="phone-status-icons"><span class="service">COSMOTE</span><span class="signal">▂▃▅▇</span><span class="wifi">⌁</span><span class="battery"><span class="battery-level"></span></span></span></div>` : '';
   const inputHtml = done
     ? '<p class="muted chat-complete">Conversation complete.</p>'
-    : `<form class="chat-form" id="chatForm"><textarea id="chatText" rows="1" inputmode="text" autocomplete="off" autocapitalize="sentences" placeholder="iMessage"></textarea><button aria-label="Send message">↑</button></form>`;
+    : `<form class="chat-form" id="chatForm"><textarea id="chatText" rows="1" inputmode="text" autocomplete="off" autocapitalize="sentences" placeholder="iMessage"></textarea><button aria-label="Send message" type="submit">↑</button></form>`;
 
-  app.innerHTML = `<div class="chat-page ${shellClass}">
-    <div class="chat-frame">
-      ${statusBar}
-      <div class="chat-header"><div class="avatar">A</div><div><h2>Alex</h2><p class="muted">Engagement Agent · ${data.turns}/${data.target_total_turns} turns</p></div></div>
-      <div class="chat"><div class="messages" id="messages">${data.transcript.map(chatMessageHtml).join('')}</div>${inputHtml}</div>
+  app.innerHTML = `<div class="${pageClass}">
+    <div class="${shellClass}">
+      <div class="${screenClass}">
+        ${statusBar}
+        <div class="phone-header">
+          <div class="phone-avatar">A</div>
+          <div class="phone-title">Alex</div>
+          <div class="phone-subtitle">Engagement Agent · ${data.turns}/${data.target_total_turns} turns</div>
+        </div>
+        <div class="phone-messages" id="messages">${data.transcript.map(chatMessageHtml).join('')}</div>
+        ${inputHtml}
+      </div>
     </div>
   </div>${err ? errorBox(err) : ''}` + (done ? actions('<button id="finish">Finish experiment</button>') : '');
 
@@ -370,7 +383,7 @@ async function renderChat(err = '') {
     textEl.style.height = '';
     const messages = document.getElementById('messages');
     messages.insertAdjacentHTML('beforeend', chatMessageHtml({ speaker: 'Human', text, created_at: new Date().toISOString() }));
-    messages.insertAdjacentHTML('beforeend', `<div class="message-row Agent typing-row"><div class="message-sender">Alex</div><div class="bubble Agent typing"><span></span><span></span><span></span></div></div>`);
+    messages.insertAdjacentHTML('beforeend', `<div class="message-row Agent typing-row"><div class="message-sender">Alex</div><div class="message-line"><div class="agent-mini-avatar">A</div><div class="bubble Agent typing"><span></span><span></span><span></span></div></div></div>`);
     scrollMessagesToBottom();
     try {
       const result = await api('/api/chat', { method: 'POST', body: JSON.stringify({ participant_id: state.participant, text }) });

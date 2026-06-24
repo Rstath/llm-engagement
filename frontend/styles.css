@@ -915,7 +915,7 @@ body[data-step="chat"] .card {
   }
 }
 
-/* iMessage composer: send button inside input, visible only when user types */
+/* Final composer, modal, Android keyboard, and real mobile fixes */
 .chat-form {
   flex: 0 0 auto !important;
   display: block !important;
@@ -976,7 +976,7 @@ body[data-step="chat"] .card {
   width: 30px !important;
   height: 30px !important;
   min-width: 30px !important;
-  margin: 4px 0 4px 0 !important;
+  margin: 4px 0 !important;
   padding: 0 !important;
   border: 0 !important;
   border-radius: 50% !important;
@@ -1020,6 +1020,67 @@ body[data-step="chat"] .card {
     min-width: 30px !important;
     flex-basis: 30px !important;
     border-radius: 50% !important;
+  }
+}
+
+@media (max-width: 1024px) {
+  .resume-modal-backdrop,
+  .contact-modal-backdrop {
+    padding: 0 !important;
+  }
+
+  .modal-dialog {
+    min-height: 100% !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    align-items: flex-end !important;
+  }
+
+  .modal-content {
+    border-radius: 18px 18px 0 0 !important;
+  }
+
+  body[data-step="chat"] {
+    height: 100svh;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  .native-chat-shell,
+  .native-chat-screen {
+    height: 100svh !important;
+    height: 100dvh !important;
+    min-height: 100svh !important;
+    min-height: 100dvh !important;
+    overflow: hidden !important;
+  }
+
+  .native-chat-screen {
+    position: relative !important;
+    display: flex !important;
+    flex-direction: column !important;
+  }
+
+  .native-chat-screen .phone-messages {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    padding-bottom: calc(110px + var(--keyboard-offset, 0px)) !important;
+  }
+
+  .native-chat-screen .chat-form {
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: var(--keyboard-offset, 0px) !important;
+    z-index: 1000 !important;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom)) !important;
+    transform: translateZ(0);
+  }
+
+  .native-chat-screen .message-composer {
+    max-width: 100%;
   }
 }
 

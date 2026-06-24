@@ -32,7 +32,7 @@ function setProgress(progress) {
   state.progress = progress;
   state.participant = progress.participant_id;
   saveParticipant(progress.participant_id);
-  participantLabel.textContent = `Participant: ${progress.participant_id}`;
+  if (participantLabel) participantLabel.textContent = `Participant: ${progress.participant_id}`;
 }
 function errorBox(err) { return `<p class="error">${htmlEscape(err.message || err)}</p>`; }
 function actions(...buttons) { return `<div class="actions">${buttons.join('')}</div>`; }
@@ -131,6 +131,16 @@ function scrollPageToTop() {
   window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   document.documentElement.scrollTop = 0;
   document.body.scrollTop = 0;
+  const appShell = document.querySelector('.app-shell');
+  if (appShell) appShell.scrollTop = 0;
+  const card = document.querySelector('.card');
+  if (card) card.scrollTop = 0;
+}
+
+function scrollToTopAfterRender() {
+  requestAnimationFrame(() => {
+    setTimeout(scrollPageToTop, 0);
+  });
 }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 function agentTypingDelay(text) {
@@ -140,7 +150,6 @@ function agentTypingDelay(text) {
 function spinnerHtml(label = 'Loading') {
   return `<div class="page-loader" role="status" aria-live="polite"><span class="spinner"></span><span>${htmlEscape(label)}</span></div>`;
 }
-
 function updateComposerState(textEl, sendBtn) {
   if (!textEl) return;
   textEl.style.height = 'auto';
@@ -189,17 +198,42 @@ function renderHelpButton() {
 }
 
 function keepNativeInputVisible() {
-  if (isDesktopDevice() || !window.visualViewport) return;
-  const apply = () => {
-    const keyboard = Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop);
+  if (isDesktopDevice()) return;
+
+  const applyKeyboardOffset = () => {
+    let keyboard = 0;
+
+    if (window.visualViewport) {
+      keyboard = Math.max(
+        0,
+        window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop
+      );
+    }
+
     document.documentElement.style.setProperty('--keyboard-offset', `${keyboard}px`);
-    setTimeout(scrollMessagesToBottom, 30);
+
+    const form = document.getElementById('chatForm');
+    const textEl = document.getElementById('chatText');
+
+    if (form && textEl && document.activeElement === textEl) {
+      requestAnimationFrame(() => {
+        form.scrollIntoView({ block: 'end', behavior: 'smooth' });
+        setTimeout(scrollMessagesToBottom, 60);
+      });
+    }
   };
-  window.visualViewport.removeEventListener('resize', apply);
-  window.visualViewport.removeEventListener('scroll', apply);
-  window.visualViewport.addEventListener('resize', apply);
-  window.visualViewport.addEventListener('scroll', apply);
-  apply();
+
+  if (window.visualViewport) {
+    window.visualViewport.removeEventListener('resize', applyKeyboardOffset);
+    window.visualViewport.removeEventListener('scroll', applyKeyboardOffset);
+    window.visualViewport.addEventListener('resize', applyKeyboardOffset);
+    window.visualViewport.addEventListener('scroll', applyKeyboardOffset);
+  }
+
+  window.removeEventListener('resize', applyKeyboardOffset);
+  window.addEventListener('resize', applyKeyboardOffset);
+
+  applyKeyboardOffset();
 }
 
 async function init() {
@@ -216,17 +250,24 @@ async function init() {
 function route() {
   const hash = location.hash.replace('#', '');
   const nextStep = hash === 'researcher' ? 'researcher' : (state.progress.current_step || 'consent');
-  if (state.lastRenderedStep !== nextStep) scrollPageToTop();
+  const pageChanged = state.lastRenderedStep !== nextStep;
   state.lastRenderedStep = nextStep;
-  if (hash === 'researcher') return renderResearcherLogin();
+
+  const finishRoute = (renderFn) => {
+    const result = renderFn();
+    if (pageChanged) scrollToTopAfterRender();
+    return result;
+  };
+
+  if (hash === 'researcher') return finishRoute(renderResearcherLogin);
   const step = state.progress.current_step || 'consent';
   document.body.dataset.step = step;
-  if (step === 'consent') return renderConsent();
-  if (step === 'pre') return renderPre();
-  if (step === 'big5') return renderBig5();
-  if (step === 'topics' || step === 'topic_preferences') return renderTopicsMost();
-  if (step === 'chat') return renderChat();
-  return renderDone();
+  if (step === 'consent') return finishRoute(renderConsent);
+  if (step === 'pre') return finishRoute(renderPre);
+  if (step === 'big5') return finishRoute(renderBig5);
+  if (step === 'topics' || step === 'topic_preferences') return finishRoute(renderTopicsMost);
+  if (step === 'chat') return finishRoute(renderChat);
+  return finishRoute(renderDone);
 }
 
 function renderConsent() {
@@ -415,16 +456,17 @@ function renderTopicsMost(err = '') {
   function refresh() { const now = getCheckedTopics(); saveDraft('most_interesting_topics', now); renderTopicsMost(err); }
   document.querySelectorAll('input[name="topic"]').forEach(cb => cb.addEventListener('change', refresh));
   btn.disabled = selected.length !== 2;
-  btn.onclick = () => renderTopicsLeast(selected);
+  btn.onclick = () => renderTopicsLeast(selected, '', true);
 }
-function renderTopicsLeast(most, err = '') {
+function renderTopicsLeast(most, err = '', shouldScrollTop = false) {
+  if (shouldScrollTop) scrollToTopAfterRender();
   const savedLeast = loadDraft('least_interesting_topics', state.progress.least_topics || []).filter(id => !most.includes(id));
   app.innerHTML = `<h2>Select the 2 topics you find least interesting</h2><p>Choose exactly 2 topics. Your two most-interesting topics are removed from this list.</p>${topicCards(savedLeast, most)}${err ? errorBox(err) : ''}` + actions('<button class="secondary" id="back">Back</button><button id="continue" disabled>Start conversation</button>');
   const btn = document.getElementById('continue');
   function refresh() { const now = getCheckedTopics(); saveDraft('least_interesting_topics', now); renderTopicsLeast(most, err); }
   document.querySelectorAll('input[name="topic"]').forEach(cb => cb.addEventListener('change', refresh));
   btn.disabled = savedLeast.length !== 2;
-  document.getElementById('back').onclick = () => renderTopicsMost();
+  document.getElementById('back').onclick = () => { renderTopicsMost(); scrollToTopAfterRender(); };
   btn.onclick = async () => {
     if (savedLeast.length !== 2) return renderTopicsLeast(most, new Error('Please select exactly 2 topics.'));
     try {
@@ -526,17 +568,31 @@ async function renderChat(err = '') {
         await sendMessage();
       }
     });
-    textEl.addEventListener('focus', () => setTimeout(scrollMessagesToBottom, 350));
+    textEl.addEventListener('focus', () => {
+      keepNativeInputVisible();
+
+      setTimeout(() => {
+        const formEl = document.getElementById('chatForm');
+        if (formEl && !isDesktopDevice()) formEl.scrollIntoView({ block: 'end', behavior: 'smooth' });
+        scrollMessagesToBottom();
+      }, 250);
+
+      setTimeout(() => {
+        const formEl = document.getElementById('chatForm');
+        if (formEl && !isDesktopDevice()) formEl.scrollIntoView({ block: 'end', behavior: 'smooth' });
+        scrollMessagesToBottom();
+      }, 700);
+    });
   }
   const finish = document.getElementById('finish');
   if (finish) finish.onclick = async () => { setProgress(await api(`/api/finish/${state.participant}`, { method: 'POST' })); renderDone(); };
 }
 function renderDone() {
-  participantLabel.textContent = state.participant ? `Participant: ${state.participant}` : '';
+  if (participantLabel) participantLabel.textContent = state.participant ? `Participant: ${state.participant}` : '';
   app.innerHTML = `<div class="thank-you"><div class="thank-you-check">✓</div><h2>Thank you!</h2><p>Your responses have been submitted successfully.</p></div>`;
 }
 function renderResearcherLogin(err = '') {
-  participantLabel.textContent = 'Researcher area';
+  if (participantLabel) participantLabel.textContent = 'Researcher area';
   app.innerHTML = `<h2>Researcher login</h2><p class="muted">This page is protected by the backend. Changing the URL is not enough to access participant data.</p><label>Password<input type="password" id="password"></label>${err ? errorBox(err) : ''}` + actions('<button id="login">Log in</button>');
   document.getElementById('login').onclick = async () => {
     try { const res = await api('/api/researcher/login', { method:'POST', body: JSON.stringify({ password: document.getElementById('password').value }) }); localStorage.setItem('researcher_token', res.token); renderResearcherDashboard(); } catch(e) { renderResearcherLogin(e); }

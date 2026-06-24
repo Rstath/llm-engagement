@@ -140,6 +140,18 @@ function agentTypingDelay(text) {
 function spinnerHtml(label = 'Loading') {
   return `<div class="page-loader" role="status" aria-live="polite"><span class="spinner"></span><span>${htmlEscape(label)}</span></div>`;
 }
+
+function updateComposerState(textEl, sendBtn) {
+  if (!textEl) return;
+  textEl.style.height = 'auto';
+  const nextHeight = Math.min(textEl.scrollHeight, 120);
+  textEl.style.height = `${Math.max(38, nextHeight)}px`;
+  const hasText = textEl.value.trim().length >= 1;
+  if (sendBtn) {
+    sendBtn.disabled = !hasText;
+    sendBtn.classList.toggle('is-visible', hasText);
+  }
+}
 function openInfoModal() {
   const existing = document.querySelector('.contact-modal-backdrop');
   if (existing) existing.remove();
@@ -439,7 +451,7 @@ async function renderChat(err = '') {
     </svg></span><span class="battery"><span class="battery-level"></span></span></span></div>` : '';
   const inputHtml = done
     ? '<p class="muted chat-complete">Conversation complete.</p>'
-    : `<form class="chat-form" id="chatForm"><textarea id="chatText" rows="1" inputmode="text" autocomplete="off" autocapitalize="sentences" placeholder="Message"></textarea><button aria-label="Send message" type="submit" class="send-btn"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2L12 18M12 2L6 8M12 2L18 8"/></svg></button></form>`;
+    : `<form class="chat-form" id="chatForm"><div class="message-composer"><textarea id="chatText" rows="1" inputmode="text" autocomplete="off" autocapitalize="sentences" placeholder="Message"></textarea><button aria-label="Send message" type="submit" class="send-btn" disabled><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="M5.5 11.5L12 5l6.5 6.5"></path></svg></button></div></form>`;
 
   app.innerHTML = `<div class="${pageClass}">
     <div class="${shellClass}">
@@ -457,18 +469,19 @@ async function renderChat(err = '') {
 
   scrollMessagesToBottom();
   keepNativeInputVisible();
-  const statusClock = document.querySelector('.phone-clock');
-  if (statusClock) {
-    clearInterval(window.__phoneClockInterval);
-    window.__phoneClockInterval = setInterval(() => { statusClock.textContent = iPhoneStatusTime(); }, 30000);
-  }
+  clearInterval(window.__phoneClockInterval);
+  window.__phoneClockInterval = setInterval(() => {
+    const clock = document.querySelector('.phone-clock');
+    if (clock) clock.textContent = iPhoneStatusTime();
+  }, 30000);
   const form = document.getElementById('chatForm');
   const textEl = document.getElementById('chatText');
+  const sendBtn = form ? form.querySelector('.send-btn') : null;
   const sendMessage = async () => {
     const text = textEl.value.trim();
     if (!text) return;
     textEl.value = '';
-    textEl.style.height = '';
+    updateComposerState(textEl, sendBtn);
     const messages = document.getElementById('messages');
     messages.insertAdjacentHTML('beforeend', chatMessageHtml({ speaker: 'Human', text, created_at: new Date().toISOString() }));
     messages.insertAdjacentHTML('beforeend', `<div class="message-row Agent typing-row"><div class="message-sender">Alex</div><div class="message-line"><div class="agent-mini-avatar">A</div><div class="bubble Agent typing" aria-label="Alex is typing"><span></span><span></span><span></span></div></div></div>`);
@@ -502,9 +515,9 @@ async function renderChat(err = '') {
   };
   if (form && textEl) {
     form.onsubmit = async (ev) => { ev.preventDefault(); await sendMessage(); };
+    updateComposerState(textEl, sendBtn);
     textEl.addEventListener('input', () => {
-      textEl.style.height = 'auto';
-      textEl.style.height = Math.min(textEl.scrollHeight, 120) + 'px';
+      updateComposerState(textEl, sendBtn);
       setTimeout(scrollMessagesToBottom, 30);
     });
     textEl.addEventListener('keydown', async (ev) => {

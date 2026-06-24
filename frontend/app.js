@@ -112,7 +112,7 @@ function renderConsent() {
 
 function renderPre(errors = {}) {
   const saved = state.progress.pre || {};
-  const usedAI = saved.used_ai_before || loadDraft('pre_used_ai_before', '');
+  const usedAI = saved.used_ai_before || '';
   app.innerHTML = `<h2>Pre-experiment questionnaire</h2>
     <p class="muted">This questionnaire takes approximately 3–5 minutes to complete. Your responses will be used for research purposes only and will remain anonymous.</p>
     <h3>Demographics</h3>
@@ -187,7 +187,6 @@ function renderPre(errors = {}) {
   }
   function renderAiFollowups() {
     const value = getRadio('used_ai_before');
-    saveDraft('pre_used_ai_before', value || '');
     if (value !== 'Yes') { aiBox.innerHTML = ''; updateButton(); return; }
     const emotions = saved.ai_experience_emotions || {};
     aiBox.innerHTML = `<div class="section"><strong>General-purpose AI assistants (e.g. Gemma-based, Llama-based, Mistral-based local assistants) *</strong>${radioGroup('ai_general_purpose', AI_FREQUENCY, saved.ai_use_general_purpose, true)}${fieldError(errors, 'ai_general_purpose')}</div>
@@ -211,7 +210,7 @@ function renderPre(errors = {}) {
       answers.ai_use_specific_purpose = null;
       answers.ai_experience_emotions = {};
     }
-    try { setProgress(await api('/api/pre', { method: 'POST', body: JSON.stringify({ participant_id: state.participant, answers }) })); clearDraft('pre_used_ai_before'); route(); }
+    try { setProgress(await api('/api/pre', { method: 'POST', body: JSON.stringify({ participant_id: state.participant, answers }) })); route(); }
     catch(e) { renderPre({ form: e.message }); }
   };
 }

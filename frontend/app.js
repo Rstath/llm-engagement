@@ -71,9 +71,7 @@ function hasSavedProgress(progress) {
 }
 function showResumeModalOnce() {
   if (!state.hadExistingParticipant || !hasSavedProgress(state.progress)) return;
-  const key = `${state.participant}_resume_modal_seen_${state.progress.current_step}`;
-  if (sessionStorage.getItem(key)) return;
-  sessionStorage.setItem(key, '1');
+  document.querySelectorAll('.resume-modal-backdrop').forEach(el => el.remove());
   const modal = document.createElement('div');
   modal.className = 'modal fade show resume-modal-backdrop';
   modal.setAttribute('role', 'dialog');
@@ -129,6 +127,54 @@ function scrollMessagesToBottom() {
   const messages = document.getElementById('messages');
   if (messages) messages.scrollTop = messages.scrollHeight;
 }
+function scrollPageToTop() {
+  window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
+}
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+function agentTypingDelay(text) {
+  const length = String(text || '').trim().length;
+  return Math.min(3600, Math.max(900, 500 + length * 18));
+}
+function spinnerHtml(label = 'Loading') {
+  return `<div class="page-loader" role="status" aria-live="polite"><span class="spinner"></span><span>${htmlEscape(label)}</span></div>`;
+}
+function openInfoModal() {
+  const existing = document.querySelector('.contact-modal-backdrop');
+  if (existing) existing.remove();
+  const modal = document.createElement('div');
+  modal.className = 'modal fade show contact-modal-backdrop';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.innerHTML = `<div class="modal-dialog modal-dialog-centered"><div class="modal-content contact-modal-content">
+    <div class="modal-header"><h3 class="modal-title">Questions or concerns?</h3><button type="button" class="btn-close" aria-label="Close">×</button></div>
+    <div class="modal-body">
+      <p>If you experience discomfort, distress, or any problem during the study, you may stop participating at any time by closing the browser window.</p>
+      <p>You may contact the researcher at any time if something bad occurs during or after participation.</p>
+      <p><strong>Researcher</strong><br>Roubini Stathopoulou<br><a href="mailto:rstathopoulou76@gmail.com">rstathopoulou76@gmail.com</a></p>
+    </div>
+    <div class="modal-footer"><button type="button" class="resume-continue">Close</button></div>
+  </div></div>`;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  modal.addEventListener('click', ev => { if (ev.target === modal) close(); });
+  modal.querySelector('.btn-close').addEventListener('click', close);
+  modal.querySelector('.resume-continue').addEventListener('click', close);
+}
+function renderHelpButton() {
+  let btn = document.getElementById('studyHelpButton');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'studyHelpButton';
+    btn.className = 'study-help-button';
+    btn.type = 'button';
+    btn.setAttribute('aria-label', 'Study contact information');
+    btn.textContent = '?';
+    document.body.appendChild(btn);
+  }
+  btn.onclick = openInfoModal;
+}
 
 function keepNativeInputVisible() {
   if (isDesktopDevice() || !window.visualViewport) return;
@@ -151,11 +197,15 @@ async function init() {
   const participant_id = localStorage.getItem('participant_id');
   state.hadExistingParticipant = Boolean(participant_id);
   setProgress(await api('/api/session', { method: 'POST', body: JSON.stringify({ participant_id }) }));
+  renderHelpButton();
   route();
   setTimeout(showResumeModalOnce, 150);
 }
 function route() {
   const hash = location.hash.replace('#', '');
+  const nextStep = hash === 'researcher' ? 'researcher' : (state.progress.current_step || 'consent');
+  if (state.lastRenderedStep !== nextStep) scrollPageToTop();
+  state.lastRenderedStep = nextStep;
   if (hash === 'researcher') return renderResearcherLogin();
   const step = state.progress.current_step || 'consent';
   document.body.dataset.step = step;
@@ -374,7 +424,7 @@ function renderTopicsLeast(most, err = '') {
 }
 
 async function renderChat(err = '') {
-  app.innerHTML = `<p class="muted">Loading chat...</p>`;
+  app.innerHTML = spinnerHtml('Loading chat');
   let data;
   try { data = await api(`/api/chat/${state.participant}`); } catch(e) { app.innerHTML = errorBox(e); return; }
 
@@ -383,10 +433,10 @@ async function renderChat(err = '') {
   const pageClass = desktop ? 'chat-page chat-page--desktop' : 'chat-page chat-page--native';
   const shellClass = desktop ? 'phone-shell' : 'native-chat-shell';
   const screenClass = desktop ? 'phone-screen' : 'native-chat-screen';
-  const statusBar = desktop ? `<div class="phone-status-bar"><span class="phone-clock">${iPhoneStatusTime()}</span><span class="phone-status-icons"><span class="wifi-icon" aria-hidden="true"><span></span><span></span><span></span></span><span class="battery"><span class="battery-level"></span></span></span></div>` : '';
+  const statusBar = desktop ? `<div class="phone-status-bar"><span class="phone-clock">${iPhoneStatusTime()}</span><span class="phone-status-icons"><span class="wifi-icon" aria-hidden="true"><span class="wifi-arc wifi-arc-1"></span><span class="wifi-arc wifi-arc-2"></span><span class="wifi-dot"></span></span><span class="battery"><span class="battery-level"></span></span></span></div>` : '';
   const inputHtml = done
     ? '<p class="muted chat-complete">Conversation complete.</p>'
-    : `<form class="chat-form" id="chatForm"><textarea id="chatText" rows="1" inputmode="text" autocomplete="off" autocapitalize="sentences" placeholder="iMessage"></textarea><button aria-label="Send message" type="submit">↑</button></form>`;
+    : `<form class="chat-form" id="chatForm"><textarea id="chatText" rows="1" inputmode="text" autocomplete="off" autocapitalize="sentences" placeholder="Message"></textarea><button aria-label="Send message" type="submit">↑</button></form>`;
 
   app.innerHTML = `<div class="${pageClass}">
     <div class="${shellClass}">
@@ -395,7 +445,6 @@ async function renderChat(err = '') {
         <div class="phone-header">
           <div class="phone-avatar">A</div>
           <div class="phone-title">Alex</div>
-          <div class="phone-subtitle">Engagement Agent · ${data.turns}/${data.target_total_turns} turns</div>
         </div>
         <div class="phone-messages" id="messages">${visibleTranscript(data.transcript).map(chatMessageHtml).join('')}</div>
         ${inputHtml}
@@ -419,15 +468,16 @@ async function renderChat(err = '') {
     textEl.style.height = '';
     const messages = document.getElementById('messages');
     messages.insertAdjacentHTML('beforeend', chatMessageHtml({ speaker: 'Human', text, created_at: new Date().toISOString() }));
-    messages.insertAdjacentHTML('beforeend', `<div class="message-row Agent typing-row"><div class="message-sender">Alex</div><div class="message-line"><div class="agent-mini-avatar">A</div><div class="bubble Agent typing"><span></span><span></span><span></span></div></div></div>`);
+    messages.insertAdjacentHTML('beforeend', `<div class="message-row Agent typing-row"><div class="message-sender">Alex</div><div class="message-line"><div class="agent-mini-avatar">A</div><div class="bubble Agent typing" aria-label="Alex is typing"><span></span><span></span><span></span></div></div></div>`);
     scrollMessagesToBottom();
     try {
       const result = await api('/api/chat', { method: 'POST', body: JSON.stringify({ participant_id: state.participant, text }) });
       const latestTranscript = result.transcript || [];
+      const latestAgent = [...latestTranscript].reverse().find(t => t.speaker === 'Agent' || t.speaker === 'agent');
+      await sleep(agentTypingDelay(latestAgent?.text || ''));
       const latestTurns = latestTranscript.length;
       const latestDone = result.done || latestTurns >= data.target_total_turns;
       const headerSubtitle = document.querySelector('.phone-subtitle');
-      if (headerSubtitle) headerSubtitle.textContent = `Engagement Agent · ${latestTurns}/${data.target_total_turns} turns`;
       messages.innerHTML = visibleTranscript(latestTranscript).map(chatMessageHtml).join('');
       scrollMessagesToBottom();
       if (latestDone) {

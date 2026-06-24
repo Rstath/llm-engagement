@@ -914,3 +914,49 @@ body[data-step="chat"] .card {
     border-radius: 18px 18px 0 0;
   }
 }
+
+
+/* SEND BUTTON FIX */
+.chat-form {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  flex-wrap: nowrap !important;
+}
+
+.chat-form textarea {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  max-height: 90px !important;
+}
+
+.chat-form .send-btn {
+  width: 38px !important;
+  height: 38px !important;
+  min-width: 38px !important;
+  flex: 0 0 38px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-radius: 50% !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: #007aff !important;
+  color: #fff !important;
+}
+
+.chat-form .send-btn svg {
+  width: 18px !important;
+  height: 18px !important;
+  display: block !important;
+}
+
+@media (min-width: 1025px) {
+  .chat-form button.send-btn {
+    width: 38px !important;
+    height: 38px !important;
+    border-radius: 50% !important;
+  }
+}

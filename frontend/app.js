@@ -88,8 +88,6 @@ function showResumeModalOnce() {
 }
 function parseTimestamp(value) {
   if (!value) return new Date();
-  // Backend timestamps are ISO strings without a timezone on Render. Treat them as UTC
-  // so the UI shows the participant's actual local time.
   const raw = String(value);
   const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw);
   const d = new Date(hasTimezone ? raw : `${raw}Z`);
@@ -136,11 +134,8 @@ function scrollPageToTop() {
   const card = document.querySelector('.card');
   if (card) card.scrollTop = 0;
 }
-
 function scrollToTopAfterRender() {
-  requestAnimationFrame(() => {
-    setTimeout(scrollPageToTop, 0);
-  });
+  requestAnimationFrame(() => { setTimeout(scrollPageToTop, 0); });
 }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 function agentTypingDelay(text) {
@@ -197,43 +192,16 @@ function renderHelpButton() {
   btn.onclick = openInfoModal;
 }
 
+// ── Mobile keyboard helpers ──────────────────────────────────────
+// The layout fix (100dvh flex column + sticky composer) handles keyboard
+// push-up automatically on Android and iOS. We only need to scroll the
+// message list to the bottom when the visual viewport resizes.
 function keepNativeInputVisible() {
   if (isDesktopDevice()) return;
-
-  const applyKeyboardOffset = () => {
-    let keyboard = 0;
-
-    if (window.visualViewport) {
-      keyboard = Math.max(
-        0,
-        window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop
-      );
-    }
-
-    document.documentElement.style.setProperty('--keyboard-offset', `${keyboard}px`);
-
-    const form = document.getElementById('chatForm');
-    const textEl = document.getElementById('chatText');
-
-    if (form && textEl && document.activeElement === textEl) {
-      requestAnimationFrame(() => {
-        form.scrollIntoView({ block: 'end', behavior: 'smooth' });
-        setTimeout(scrollMessagesToBottom, 60);
-      });
-    }
-  };
-
-  if (window.visualViewport) {
-    window.visualViewport.removeEventListener('resize', applyKeyboardOffset);
-    window.visualViewport.removeEventListener('scroll', applyKeyboardOffset);
-    window.visualViewport.addEventListener('resize', applyKeyboardOffset);
-    window.visualViewport.addEventListener('scroll', applyKeyboardOffset);
-  }
-
-  window.removeEventListener('resize', applyKeyboardOffset);
-  window.addEventListener('resize', applyKeyboardOffset);
-
-  applyKeyboardOffset();
+  if (!window.visualViewport) return;
+  const onVpResize = () => { scrollMessagesToBottom(); };
+  window.visualViewport.removeEventListener('resize', onVpResize);
+  window.visualViewport.addEventListener('resize', onVpResize);
 }
 
 async function init() {
@@ -252,13 +220,11 @@ function route() {
   const nextStep = hash === 'researcher' ? 'researcher' : (state.progress.current_step || 'consent');
   const pageChanged = state.lastRenderedStep !== nextStep;
   state.lastRenderedStep = nextStep;
-
   const finishRoute = (renderFn) => {
     const result = renderFn();
     if (pageChanged) scrollToTopAfterRender();
     return result;
   };
-
   if (hash === 'researcher') return finishRoute(renderResearcherLogin);
   const step = state.progress.current_step || 'consent';
   document.body.dataset.step = step;
@@ -511,14 +477,17 @@ async function renderChat(err = '') {
 
   scrollMessagesToBottom();
   keepNativeInputVisible();
+
   clearInterval(window.__phoneClockInterval);
   window.__phoneClockInterval = setInterval(() => {
     const clock = document.querySelector('.phone-clock');
     if (clock) clock.textContent = iPhoneStatusTime();
   }, 30000);
+
   const form = document.getElementById('chatForm');
   const textEl = document.getElementById('chatText');
   const sendBtn = form ? form.querySelector('.send-btn') : null;
+
   const sendMessage = async () => {
     const text = textEl.value.trim();
     if (!text) return;
@@ -535,7 +504,6 @@ async function renderChat(err = '') {
       await sleep(agentTypingDelay(latestAgent?.text || ''));
       const latestTurns = latestTranscript.length;
       const latestDone = result.done || latestTurns >= data.target_total_turns;
-      const headerSubtitle = document.querySelector('.phone-subtitle');
       messages.innerHTML = visibleTranscript(latestTranscript).map(chatMessageHtml).join('');
       scrollMessagesToBottom();
       if (latestDone) {
@@ -555,38 +523,36 @@ async function renderChat(err = '') {
       scrollMessagesToBottom();
     }
   };
+
   if (form && textEl) {
     form.onsubmit = async (ev) => { ev.preventDefault(); await sendMessage(); };
     updateComposerState(textEl, sendBtn);
+
     textEl.addEventListener('input', () => {
       updateComposerState(textEl, sendBtn);
       setTimeout(scrollMessagesToBottom, 30);
     });
+
+    // Send on Enter for ALL devices (desktop and Android hardware/soft keyboards).
+    // On mobile, Shift+Enter still inserts a newline.
     textEl.addEventListener('keydown', async (ev) => {
-      if (isDesktopDevice() && ev.key === 'Enter' && !ev.shiftKey) {
+      if (ev.key === 'Enter' && !ev.shiftKey) {
         ev.preventDefault();
         await sendMessage();
       }
     });
+
+    // On focus: scroll messages into view after keyboard animation finishes.
     textEl.addEventListener('focus', () => {
-      keepNativeInputVisible();
-
-      setTimeout(() => {
-        const formEl = document.getElementById('chatForm');
-        if (formEl && !isDesktopDevice()) formEl.scrollIntoView({ block: 'end', behavior: 'smooth' });
-        scrollMessagesToBottom();
-      }, 250);
-
-      setTimeout(() => {
-        const formEl = document.getElementById('chatForm');
-        if (formEl && !isDesktopDevice()) formEl.scrollIntoView({ block: 'end', behavior: 'smooth' });
-        scrollMessagesToBottom();
-      }, 700);
+      setTimeout(scrollMessagesToBottom, 300);
+      setTimeout(scrollMessagesToBottom, 700);
     });
   }
+
   const finish = document.getElementById('finish');
   if (finish) finish.onclick = async () => { setProgress(await api(`/api/finish/${state.participant}`, { method: 'POST' })); renderDone(); };
 }
+
 function renderDone() {
   if (participantLabel) participantLabel.textContent = state.participant ? `Participant: ${state.participant}` : '';
   app.innerHTML = `<div class="thank-you"><div class="thank-you-check">✓</div><h2>Thank you!</h2><p>Your responses have been submitted successfully.</p></div>`;

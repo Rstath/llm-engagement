@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import os
 import re
 import random
@@ -39,6 +40,9 @@ MEDIUM_LLM_MODEL = os.getenv("MEDIUM_LLM_MODEL", "google/gemma-3-27b-it")
 DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.9"))
 DEFAULT_MAX_AGENT_TOKENS = int(os.getenv("DEFAULT_MAX_AGENT_TOKENS", "70"))
 TARGET_TOTAL_TURNS = int(os.getenv("TARGET_TOTAL_TURNS", "14"))
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+WINDOW_SIZE = int(os.getenv("METRIC_WINDOW_SIZE", "3"))
+_embedding_model = None
 
 app = FastAPI(title="LLM Engagement Study API")
 app.add_middleware(
@@ -148,6 +152,51 @@ def init_db():
             text TEXT NOT NULL,
             turn_index INTEGER NOT NULL,
             session_id TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS conversation_turn_metrics (
+            turn_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            participant_id TEXT NOT NULL,
+            turn_index INTEGER NOT NULL,
+            speaker TEXT NOT NULL,
+            text TEXT NOT NULL,
+            word_count INTEGER NOT NULL,
+            token_count INTEGER NOT NULL,
+            is_question INTEGER NOT NULL,
+            embedding_json TEXT NOT NULL DEFAULT '[]',
+            topic_similarity REAL,
+            prev_similarity REAL,
+            windowed_similarity REAL,
+            novelty REAL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS conversation_session_metrics (
+            session_id TEXT PRIMARY KEY,
+            participant_id TEXT NOT NULL,
+            topic_id TEXT NOT NULL,
+            topic_preference TEXT NOT NULL,
+            model_size TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            personality_context_enabled INTEGER NOT NULL,
+            style_name TEXT NOT NULL,
+            topic_prompt TEXT NOT NULL,
+            topic_embedding_json TEXT NOT NULL DEFAULT '[]',
+            total_turns INTEGER NOT NULL,
+            human_turns INTEGER NOT NULL,
+            agent_turns INTEGER NOT NULL,
+            total_words INTEGER NOT NULL,
+            total_tokens INTEGER NOT NULL,
+            coherence REAL,
+            windowed_coherence REAL,
+            topic_consistency REAL,
+            novelty REAL,
+            turn_balance REAL,
+            token_balance REAL,
+            question_rate REAL,
+            engagement_score REAL,
+            updated_at TEXT NOT NULL
         );
         """)
         # Safe migration for existing local SQLite databases created before session_id existed.
@@ -348,37 +397,27 @@ def generate_conversation_assignments(pid: str, reset_existing: bool = False):
             conn.execute("DELETE FROM conversation_assignments WHERE participant_id=?", (pid,))
             conn.execute("DELETE FROM experiment_sessions WHERE participant_id=?", (pid,))
 
-            rows = []
+        rows = []
+        for topic_id in selected_topics:
+            variations = shuffled_for_participant(pid, f"{topic_id}:variants", list(TOPICS[topic_id]["variations"].keys()))[:2]
+            combos = [("small", False), ("small", True), ("medium", False), ("medium", True)]
+            combos = shuffled_for_participant(pid, f"{topic_id}:model-context", combos)
+            # Use exactly two equivalent scenario variants per topic, each appearing twice.
+            variant_slots = shuffled_for_participant(pid, f"{topic_id}:variant-slots", [variations[0], variations[0], variations[1], variations[1]])
+            for idx, (model_size, personality_enabled) in enumerate(combos):
+                variation_id = variant_slots[idx]
+                rows.append({
+                    "topic_id": topic_id,
+                    "variation_id": variation_id,
+                    "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
+                    "topic_preference": topic_preference_label(pid, topic_id),
+                    "style_name": stable_choice(f"{pid}:{topic_id}:{idx}:style", list(STYLE_PROMPTS.keys())),
+                    "model_size": model_size,
+                    "model_name": MEDIUM_LLM_MODEL if model_size == "medium" else SMALL_LLM_MODEL,
+                    "personality_context_enabled": personality_enabled,
+                })
 
-            # ---------- TEST MODE ----------
-            # Only ONE conversation is generated.
-            # It uses the first "most interesting" topic,
-            # medium model with personality context enabled.
-
-            prog = get_progress(pid)
-            topic_id = prog["most_topics"][0]
-
-            variation_id = stable_choice(
-                f"{pid}:{topic_id}:test",
-                list(TOPICS[topic_id]["variations"].keys()),
-            )
-
-            rows.append({
-                "topic_id": topic_id,
-                "variation_id": variation_id,
-                "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
-                "topic_preference": "most",
-                "style_name": stable_choice(
-                    f"{pid}:{topic_id}:style",
-                    list(STYLE_PROMPTS.keys()),
-                ),
-                "model_size": "medium",
-                "model_name": MEDIUM_LLM_MODEL,
-                "personality_context_enabled": True,
-            })
-            # ---------- END TEST MODE ----------
-
-        # keep only the single test conversation
+        rows = shuffled_for_participant(pid, "conversation-order", rows)
         for order, row in enumerate(rows, start=1):
             conn.execute(
                 """
@@ -792,6 +831,239 @@ def make_reply(pid, assignment, transcript):
         messages.append({"role": "user" if t["speaker"] == "Human" else "assistant", "content": t["text"]})
     return call_llm(assignment["model_name"], messages)
 
+
+def clamp01(value: Optional[float]) -> float:
+    if value is None or not isinstance(value, (int, float)) or math.isnan(float(value)):
+        return 0.0
+    return max(0.0, min(1.0, float(value)))
+
+
+def approx_token_count(text: str) -> int:
+    # Good enough for interaction analytics without adding tokenizer dependencies.
+    return max(1, round(len(str(text or '').split()) * 1.3))
+
+
+def is_question_text(text: str) -> bool:
+    s = str(text or '').lower()
+    question_words = ('what', 'why', 'how', 'when', 'where', 'which', 'who', 'would you', 'do you', 'did you', 'are you', 'can you')
+    return '?' in s or any(s.startswith(q + ' ') for q in question_words)
+
+
+def hash_embedding(text: str, dim: int = 384) -> List[float]:
+    """Deterministic fallback if sentence-transformers is not installed."""
+    vec = [0.0] * dim
+    tokens = re.findall(r"[\w']+", str(text or '').lower())
+    if not tokens:
+        tokens = ['empty']
+    for tok in tokens:
+        digest = hashlib.sha256(tok.encode('utf-8')).digest()
+        for i, b in enumerate(digest):
+            idx = (b + i * 31) % dim
+            vec[idx] += 1.0 if b % 2 else -1.0
+    norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+    return [round(x / norm, 6) for x in vec]
+
+
+def get_embedding_model():
+    global _embedding_model
+    if _embedding_model is not None:
+        return _embedding_model
+    try:
+        from sentence_transformers import SentenceTransformer
+        _embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        return _embedding_model
+    except Exception:
+        _embedding_model = False
+        return None
+
+
+def embed_texts(texts: List[str]) -> List[List[float]]:
+    model = get_embedding_model()
+    if model:
+        vectors = model.encode(texts, normalize_embeddings=True).tolist()
+        return [[round(float(x), 6) for x in v] for v in vectors]
+    return [hash_embedding(t) for t in texts]
+
+
+def cosine(a: List[float], b: List[float]) -> float:
+    if not a or not b:
+        return 0.0
+    n = min(len(a), len(b))
+    dot = sum(float(a[i]) * float(b[i]) for i in range(n))
+    na = math.sqrt(sum(float(x) * float(x) for x in a[:n]))
+    nb = math.sqrt(sum(float(x) * float(x) for x in b[:n]))
+    if not na or not nb:
+        return 0.0
+    # Convert cosine from [-1, 1] to [0, 1] for easier dashboard interpretation.
+    return round((dot / (na * nb) + 1.0) / 2.0, 4)
+
+
+def average_vector(vectors: List[List[float]]) -> List[float]:
+    vectors = [v for v in vectors if v]
+    if not vectors:
+        return []
+    n = min(len(v) for v in vectors)
+    avg = [sum(v[i] for v in vectors) / len(vectors) for i in range(n)]
+    norm = math.sqrt(sum(x * x for x in avg)) or 1.0
+    return [x / norm for x in avg]
+
+
+def compute_and_store_session_metrics(session_id: str):
+    init_db()
+    with connect() as conn:
+        assignment = conn.execute(
+            "SELECT * FROM conversation_assignments WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+        if not assignment:
+            return None
+        turns = conn.execute(
+            """
+            SELECT turn_id, participant_id, created_at, speaker, text, turn_index, session_id
+            FROM conversation_turns
+            WHERE session_id=?
+            ORDER BY turn_index ASC
+            """,
+            (session_id,),
+        ).fetchall()
+        if not turns:
+            return None
+
+    texts = [assignment['topic_prompt']] + [r['text'] for r in turns]
+    vectors = embed_texts(texts)
+    topic_embedding = vectors[0]
+    turn_embeddings = vectors[1:]
+
+    turn_metric_rows = []
+    prev_sims = []
+    topic_sims = []
+    window_sims = []
+    novelties = []
+
+    for i, r in enumerate(turns):
+        emb = turn_embeddings[i]
+        topic_sim = cosine(emb, topic_embedding)
+        prev_sim = cosine(emb, turn_embeddings[i - 1]) if i > 0 else None
+        if i > 0:
+            window_start = max(0, i - WINDOW_SIZE)
+            context_vec = average_vector(turn_embeddings[window_start:i])
+            window_sim = cosine(emb, context_vec)
+        else:
+            window_sim = None
+        novelty = round(1.0 - prev_sim, 4) if prev_sim is not None else None
+
+        if prev_sim is not None:
+            prev_sims.append(prev_sim)
+            novelties.append(novelty)
+        if window_sim is not None:
+            window_sims.append(window_sim)
+        topic_sims.append(topic_sim)
+
+        wc = len(str(r['text'] or '').split())
+        tc = approx_token_count(r['text'])
+        turn_metric_rows.append((
+            r['turn_id'], session_id, r['participant_id'], int(r['turn_index']), r['speaker'], r['text'],
+            wc, tc, int(is_question_text(r['text'])), jdump(emb), topic_sim, prev_sim, window_sim, novelty, now()
+        ))
+
+    human_turns = [r for r in turns if r['speaker'] == 'Human']
+    agent_turns = [r for r in turns if r['speaker'] == 'Agent']
+    human_tokens = sum(approx_token_count(r['text']) for r in human_turns)
+    agent_tokens = sum(approx_token_count(r['text']) for r in agent_turns)
+    total_tokens = human_tokens + agent_tokens
+    total_words = sum(len(str(r['text'] or '').split()) for r in turns)
+
+    coherence = round(sum(prev_sims) / max(1, len(prev_sims)), 4)
+    windowed_coherence = round(sum(window_sims) / max(1, len(window_sims)), 4)
+    topic_consistency = round(sum(topic_sims) / max(1, len(topic_sims)), 4)
+    novelty = round(sum(novelties) / max(1, len(novelties)), 4)
+    turn_balance = round(min(len(human_turns), len(agent_turns)) / max(1, max(len(human_turns), len(agent_turns))), 4)
+    token_balance = round(min(human_tokens, agent_tokens) / max(1, max(human_tokens, agent_tokens)), 4)
+    question_rate = round(sum(1 for r in turns if is_question_text(r['text'])) / max(1, len(turns)), 4)
+    engagement_score = round(
+        0.30 * coherence
+        + 0.25 * topic_consistency
+        + 0.20 * novelty
+        + 0.10 * turn_balance
+        + 0.15 * question_rate,
+        4,
+    )
+
+    with connect() as conn:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO conversation_turn_metrics(
+                turn_id, session_id, participant_id, turn_index, speaker, text,
+                word_count, token_count, is_question, embedding_json,
+                topic_similarity, prev_similarity, windowed_similarity, novelty, created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            turn_metric_rows,
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO conversation_session_metrics(
+                session_id, participant_id, topic_id, topic_preference, model_size, model_name,
+                personality_context_enabled, style_name, topic_prompt, topic_embedding_json,
+                total_turns, human_turns, agent_turns, total_words, total_tokens,
+                coherence, windowed_coherence, topic_consistency, novelty,
+                turn_balance, token_balance, question_rate, engagement_score, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                session_id, assignment['participant_id'], assignment['topic_id'], assignment['topic_preference'],
+                assignment['model_size'], assignment['model_name'], int(assignment['personality_context_enabled']),
+                assignment['style_name'], assignment['topic_prompt'], jdump(topic_embedding), len(turns),
+                len(human_turns), len(agent_turns), total_words, total_tokens, coherence,
+                windowed_coherence, topic_consistency, novelty, turn_balance, token_balance,
+                question_rate, engagement_score, now(),
+            ),
+        )
+        conn.commit()
+
+    return {
+        'session_id': session_id,
+        'coherence': coherence,
+        'windowed_coherence': windowed_coherence,
+        'topic_consistency': topic_consistency,
+        'novelty': novelty,
+        'turn_balance': turn_balance,
+        'token_balance': token_balance,
+        'question_rate': question_rate,
+        'engagement_score': engagement_score,
+    }
+
+
+def compute_all_completed_metrics():
+    with connect() as conn:
+        rows = conn.execute("SELECT session_id FROM conversation_assignments WHERE status='complete'").fetchall()
+    for r in rows:
+        compute_and_store_session_metrics(r['session_id'])
+
+
+def avg_float(rows, key: str) -> float:
+    vals = [float(r[key]) for r in rows if r[key] is not None]
+    return round(sum(vals) / max(1, len(vals)), 4)
+
+
+def group_average(rows, group_key: str, metric_key: str) -> List[Dict[str, Any]]:
+    groups: Dict[str, List[float]] = {}
+    for r in rows:
+        label = str(r[group_key])
+        if r[metric_key] is not None:
+            groups.setdefault(label, []).append(float(r[metric_key]))
+    return [
+        {'label': label, 'value': round(sum(vals) / max(1, len(vals)), 4), 'count': len(vals)}
+        for label, vals in sorted(groups.items())
+    ]
+
+
+def group_count(rows, group_key: str) -> List[Dict[str, Any]]:
+    counts: Dict[str, int] = {}
+    for r in rows:
+        counts[str(r[group_key])] = counts.get(str(r[group_key]), 0) + 1
+    return [{'label': k, 'value': v} for k, v in sorted(counts.items())]
+
 def researcher_token():
     return hmac.new(APP_SECRET.encode(), RESEARCHER_PASSWORD.encode(), hashlib.sha256).hexdigest()
 
@@ -948,6 +1220,7 @@ def chat_send(data: ChatIn):
 
     if len(transcript) >= TARGET_TOTAL_TURNS:
         mark_assignment_complete(session_id)
+        compute_and_store_session_metrics(session_id)
         counts = count_assignments(data.participant_id)
         all_done = counts["remaining"] == 0
         if all_done:
@@ -961,6 +1234,7 @@ def chat_send(data: ChatIn):
     conversation_done = len(transcript) >= TARGET_TOTAL_TURNS
     if conversation_done:
         mark_assignment_complete(session_id)
+        compute_and_store_session_metrics(session_id)
     counts = count_assignments(data.participant_id)
     all_done = counts["remaining"] == 0
     if all_done and conversation_done:
@@ -984,6 +1258,7 @@ def finish(participant_id: str):
 
     if active:
         mark_assignment_complete(active["session_id"])
+        compute_and_store_session_metrics(active["session_id"])
 
     counts = count_assignments(participant_id)
 
@@ -1015,6 +1290,50 @@ def overview():
     return {"participants": participants, "sessions": sessions, "access_codes": access_codes}
 
 
+
+@app.get("/api/researcher/metrics", dependencies=[Depends(require_researcher)])
+def researcher_metrics():
+    init_db()
+    compute_all_completed_metrics()
+    with connect() as conn:
+        rows = [dict(r) for r in conn.execute("""
+            SELECT * FROM conversation_session_metrics
+            ORDER BY updated_at DESC
+        """).fetchall()]
+        turn_rows = [dict(r) for r in conn.execute("""
+            SELECT * FROM conversation_turn_metrics
+            ORDER BY participant_id, session_id, turn_index ASC
+        """).fetchall()]
+
+    summary = {
+        "embedding_model": EMBEDDING_MODEL_NAME if get_embedding_model() else "hash-fallback-no-sentence-transformers",
+        "total_scored_conversations": len(rows),
+        "avg_engagement_score": avg_float(rows, "engagement_score"),
+        "avg_coherence": avg_float(rows, "coherence"),
+        "avg_windowed_coherence": avg_float(rows, "windowed_coherence"),
+        "avg_topic_consistency": avg_float(rows, "topic_consistency"),
+        "avg_novelty": avg_float(rows, "novelty"),
+        "avg_turn_balance": avg_float(rows, "turn_balance"),
+        "avg_token_balance": avg_float(rows, "token_balance"),
+        "avg_question_rate": avg_float(rows, "question_rate"),
+    }
+
+    return {
+        "summary": summary,
+        "sessions": rows,
+        "turn_metrics": turn_rows,
+        "charts": {
+            "engagement_by_model": group_average(rows, "model_size", "engagement_score"),
+            "engagement_by_context": group_average(rows, "personality_context_enabled", "engagement_score"),
+            "engagement_by_topic": group_average(rows, "topic_id", "engagement_score"),
+            "coherence_by_model": group_average(rows, "model_size", "coherence"),
+            "topic_consistency_by_topic": group_average(rows, "topic_id", "topic_consistency"),
+            "question_rate_by_model": group_average(rows, "model_size", "question_rate"),
+            "token_balance_by_model": group_average(rows, "model_size", "token_balance"),
+            "conversations_by_topic": group_count(rows, "topic_id"),
+        },
+    }
+
 @app.get("/api/researcher/participant/{participant_id}", dependencies=[Depends(require_researcher)])
 def participant_detail(participant_id: str):
     assignment = ensure_assignment(participant_id)
@@ -1033,7 +1352,11 @@ def export_csv():
         "participant_id", "access_code", "participant_created_at", "current_step", "completed",
         "session_id", "conversation_order", "assignment_status", "topic_id", "variation_id",
         "topic_preference", "model_size", "model_name", "personality_context_enabled",
-        "style_name", "speaker", "text", "timestamp"
+        "style_name", "speaker", "text", "timestamp",
+        "word_count", "token_count", "is_question", "topic_similarity", "prev_similarity",
+        "windowed_similarity", "novelty", "coherence", "windowed_coherence",
+        "topic_consistency", "session_novelty", "turn_balance", "token_balance",
+        "question_rate", "engagement_score"
     ])
     with connect() as conn:
         rows = conn.execute("""
@@ -1041,11 +1364,17 @@ def export_csv():
                 p.participant_id, ac.access_code, p.created_at AS participant_created_at, p.current_step, p.completed,
                 a.session_id, a.conversation_order, a.status AS assignment_status, a.topic_id, a.variation_id,
                 a.topic_preference, a.model_size, a.model_name, a.personality_context_enabled, a.style_name,
-                c.speaker, c.text, c.created_at AS turn_time, c.turn_index
+                c.speaker, c.text, c.created_at AS turn_time, c.turn_index,
+                tm.word_count, tm.token_count, tm.is_question, tm.topic_similarity,
+                tm.prev_similarity, tm.windowed_similarity, tm.novelty AS turn_novelty,
+                sm.coherence, sm.windowed_coherence, sm.topic_consistency, sm.novelty AS session_novelty,
+                sm.turn_balance, sm.token_balance, sm.question_rate, sm.engagement_score
             FROM participants p
             LEFT JOIN participant_access_codes ac ON p.participant_id=ac.participant_id
             LEFT JOIN conversation_assignments a ON p.participant_id=a.participant_id
             LEFT JOIN conversation_turns c ON a.session_id=c.session_id
+            LEFT JOIN conversation_turn_metrics tm ON c.turn_id=tm.turn_id
+            LEFT JOIN conversation_session_metrics sm ON a.session_id=sm.session_id
             ORDER BY p.created_at DESC, a.conversation_order ASC, c.turn_index ASC
         """).fetchall()
     for r in rows:
@@ -1054,5 +1383,20 @@ def export_csv():
             r["session_id"] or "", r["conversation_order"] or "", r["assignment_status"] or "", r["topic_id"] or "", r["variation_id"] or "",
             r["topic_preference"] or "", r["model_size"] or "", r["model_name"] or "", r["personality_context_enabled"] if r["personality_context_enabled"] is not None else "",
             r["style_name"] or "", r["speaker"] or "", r["text"] or "", r["turn_time"] or "",
+            r["word_count"] if r["word_count"] is not None else "",
+            r["token_count"] if r["token_count"] is not None else "",
+            r["is_question"] if r["is_question"] is not None else "",
+            r["topic_similarity"] if r["topic_similarity"] is not None else "",
+            r["prev_similarity"] if r["prev_similarity"] is not None else "",
+            r["windowed_similarity"] if r["windowed_similarity"] is not None else "",
+            r["turn_novelty"] if r["turn_novelty"] is not None else "",
+            r["coherence"] if r["coherence"] is not None else "",
+            r["windowed_coherence"] if r["windowed_coherence"] is not None else "",
+            r["topic_consistency"] if r["topic_consistency"] is not None else "",
+            r["session_novelty"] if r["session_novelty"] is not None else "",
+            r["turn_balance"] if r["turn_balance"] is not None else "",
+            r["token_balance"] if r["token_balance"] is not None else "",
+            r["question_rate"] if r["question_rate"] is not None else "",
+            r["engagement_score"] if r["engagement_score"] is not None else "",
         ])
     return Response(out.getvalue(), media_type="text/csv", headers={"Content-Disposition":"attachment; filename=llm_engagement_export.csv"})

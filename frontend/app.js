@@ -1086,6 +1086,83 @@ function renderDone() {
   renderParticipantLogoutButton();
   app.innerHTML = `<div class="thank-you"><div class="thank-you-check">✓</div><h2>Thank you!</h2><p>Your responses have been submitted successfully.</p></div>`;
 }
+
+function pct(value) {
+  const n = Number(value || 0);
+  return `${Math.round(n * 100)}%`;
+}
+
+function dec(value, digits = 3) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? n.toFixed(digits) : '0.000';
+}
+
+function metricCard(label, value, hint = '') {
+  return `<div class="metric-card">
+    <div class="metric-value">${htmlEscape(value)}</div>
+    <div class="metric-label">${htmlEscape(label)}</div>
+    ${hint ? `<div class="metric-hint">${htmlEscape(hint)}</div>` : ''}
+  </div>`;
+}
+
+function barChart(title, rows, valueLabel = 'Average') {
+  const clean = (rows || []).filter(r => r && r.label !== undefined);
+  if (!clean.length) {
+    return `<div class="metric-chart"><h3>${htmlEscape(title)}</h3><p class="muted">No scored conversations yet.</p></div>`;
+  }
+  const max = Math.max(...clean.map(r => Number(r.value || 0)), 0.001);
+  return `<div class="metric-chart"><h3>${htmlEscape(title)}</h3>
+    ${clean.map(r => {
+      const value = Number(r.value || 0);
+      const width = Math.max(3, Math.round((value / max) * 100));
+      const count = r.count ? ` · n=${r.count}` : '';
+      return `<div class="bar-row">
+        <div class="bar-label">${htmlEscape(String(r.label))}</div>
+        <div class="bar-track"><div class="bar-fill" style="width:${width}%"></div></div>
+        <div class="bar-value">${htmlEscape(dec(value))}${htmlEscape(count)}</div>
+      </div>`;
+    }).join('')}
+    <p class="muted small">${htmlEscape(valueLabel)}</p>
+  </div>`;
+}
+
+function renderMetricsTable(sessions) {
+  const rows = (sessions || []).slice(0, 80);
+  if (!rows.length) return '<p class="muted">No completed/scored conversations yet.</p>';
+  return `<div class="table-wrap"><table><thead><tr>
+    <th>Participant</th><th>Topic</th><th>Model</th><th>Context</th><th>Engagement</th><th>Coherence</th><th>Topic</th><th>Novelty</th><th>Q rate</th><th>Turns</th>
+  </tr></thead><tbody>${rows.map(s => `<tr>
+    <td>${htmlEscape(s.participant_id)}</td>
+    <td>${htmlEscape(s.topic_id)} (${htmlEscape(s.topic_preference)})</td>
+    <td>${htmlEscape(s.model_size)}</td>
+    <td>${s.personality_context_enabled ? 'Yes' : 'No'}</td>
+    <td>${htmlEscape(dec(s.engagement_score))}</td>
+    <td>${htmlEscape(dec(s.coherence))}</td>
+    <td>${htmlEscape(dec(s.topic_consistency))}</td>
+    <td>${htmlEscape(dec(s.novelty))}</td>
+    <td>${htmlEscape(dec(s.question_rate))}</td>
+    <td>${htmlEscape(String(s.total_turns || 0))}</td>
+  </tr>`).join('')}</tbody></table></div>`;
+}
+
+function researcherDashboardStyles() {
+  return `<style>
+    .metrics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0;}
+    .metric-card{background:rgba(27,69,79,.06);border:1px solid rgba(27,69,79,.12);border-radius:14px;padding:14px;}
+    .metric-value{font-size:1.45rem;font-weight:800;color:#1B454F;}
+    .metric-label{font-weight:700;margin-top:4px;}
+    .metric-hint,.small{font-size:.82rem;opacity:.72;margin-top:4px;}
+    .charts-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin:16px 0;}
+    .metric-chart{background:#fff;border:1px solid rgba(27,69,79,.12);border-radius:16px;padding:16px;box-shadow:0 8px 20px rgba(0,0,0,.04);}
+    .metric-chart h3{margin-top:0;margin-bottom:12px;}
+    .bar-row{display:grid;grid-template-columns:90px 1fr 82px;gap:8px;align-items:center;margin:10px 0;}
+    .bar-label{font-size:.88rem;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .bar-track{height:12px;background:rgba(27,69,79,.12);border-radius:999px;overflow:hidden;}
+    .bar-fill{height:100%;background:#1B454F;border-radius:999px;}
+    .bar-value{font-size:.82rem;text-align:right;opacity:.82;}
+  </style>`;
+}
+
 function renderResearcherLogin(err = '') {
   const logout = document.getElementById('participantLogoutButton');
   if (logout) logout.remove();
@@ -1151,14 +1228,54 @@ async function researcherApi(path, options = {}) {
 }
 async function renderResearcherDashboard(err = '') {
   let data;
-  try { data = await researcherApi('/api/researcher/overview'); } catch(e) { return renderResearcherLogin(e); }
+  let metrics;
+  try {
+    data = await researcherApi('/api/researcher/overview');
+    metrics = await researcherApi('/api/researcher/metrics');
+  } catch(e) {
+    return renderResearcherLogin(e);
+  }
 
-  app.innerHTML = `<h2>Researcher dashboard</h2>${err ? errorBox(err) : ''}
+  const s = metrics.summary || {};
+  const c = metrics.charts || {};
+
+  app.innerHTML = `${researcherDashboardStyles()}<h2>Researcher dashboard</h2>${err ? errorBox(err) : ''}
     <div class="actions">
       <button id="createCodes">Create participant codes</button>
       <a href="${API}/api/researcher/export.csv" id="exportLink">Download CSV export</a>
     </div>
     <div id="createdCodes"></div>
+
+    <h3>Results summary</h3>
+    <p class="muted">Embedding model: ${htmlEscape(s.embedding_model || 'not computed yet')}</p>
+    <div class="metrics-grid">
+      ${metricCard('Scored conversations', String(s.total_scored_conversations || 0))}
+      ${metricCard('Engagement score', dec(s.avg_engagement_score), 'Weighted overall metric')}
+      ${metricCard('Coherence', dec(s.avg_coherence), 'Consecutive-turn similarity')}
+      ${metricCard('Windowed coherence', dec(s.avg_windowed_coherence), 'Similarity to recent context')}
+      ${metricCard('Topic consistency', dec(s.avg_topic_consistency), 'Similarity to initial prompt')}
+      ${metricCard('Novelty', dec(s.avg_novelty), '1 - previous similarity')}
+      ${metricCard('Turn balance', dec(s.avg_turn_balance), 'Human vs Alex turns')}
+      ${metricCard('Token balance', dec(s.avg_token_balance), 'Human vs Alex tokens')}
+      ${metricCard('Question rate', dec(s.avg_question_rate), 'Question-bearing turns')}
+    </div>
+
+    <h3>Plots</h3>
+    <div class="charts-grid">
+      ${barChart('Engagement by model size', c.engagement_by_model, 'Higher is better')}
+      ${barChart('Engagement by personality context', c.engagement_by_context, '0=false · 1=true')}
+      ${barChart('Engagement by topic', c.engagement_by_topic, 'Average score')}
+      ${barChart('Coherence by model size', c.coherence_by_model, 'Average consecutive similarity')}
+      ${barChart('Topic consistency by topic', c.topic_consistency_by_topic, 'Average prompt similarity')}
+      ${barChart('Question rate by model', c.question_rate_by_model, 'Lower is not always better')}
+      ${barChart('Token balance by model', c.token_balance_by_model, 'Closer to 1 is more balanced')}
+      ${barChart('Conversations by topic', c.conversations_by_topic, 'Completed scored conversations')}
+    </div>
+
+    <h3>Conversation metrics</h3>
+    ${renderMetricsTable(metrics.sessions || [])}
+
+    <h3>Participants</h3>
     <div class="table-wrap"><table><thead><tr><th>Participant</th><th>Access code</th><th>Created</th><th>Step</th><th>Completed</th></tr></thead><tbody>${data.participants.map(p => `<tr><td>${htmlEscape(p.participant_id)}</td><td title="${htmlEscape(p.access_code ? 'Code hidden for privacy' : '')}">${htmlEscape(maskAccessCode(p.access_code || ''))}</td><td>${htmlEscape(p.created_at)}</td><td>${htmlEscape(p.current_step)}</td><td>${p.completed ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table></div>`;
 
   document.getElementById('createCodes').onclick = async () => {

@@ -345,14 +345,13 @@ async function loginWithAccessCode(code) {
 }
 
 function renderParticipantLogin(err = '') {
-  if (participantLabel) participantLabel.textContent = 'Participant login';
   document.body.dataset.step = 'login';
   renderParticipantLogoutButton();
 
   const savedCode = localStorage.getItem('participant_access_code') || '';
 
   app.innerHTML = `<div class="login-page">
-    <h2>Participant login</h2>
+    <h2>Login</h2>
     <p class="muted">Enter the anonymous participant code you received by email.</p>
     <div class="section">
       <label><strong>Participant code</strong>
@@ -945,13 +944,13 @@ async function renderResearcherDashboard(err = '') {
     }
 
     try {
-      const res = await researcherApi('/api/researcher/create-codes', {
+      const res = await researcherApi('/api/researcher/access-codes', {
         method: 'POST',
         body: JSON.stringify({ count })
       });
 
       const box = document.getElementById('createdCodes');
-      box.innerHTML = `<div class="section"><h3>New participant codes</h3><p class="muted">Copy these now and email one code to each participant.</p><textarea readonly rows="8">${htmlEscape((res.codes || []).join('\n'))}</textarea></div>`;
+      box.innerHTML = `<div class="section"><h3>New participant codes</h3><p class="muted">Copy these now and email one code to each participant.</p><textarea readonly rows="8">${htmlEscape((res.codes || []).map(c => c.access_code).join('\n'))}</textarea></div>`;
     } catch (e) {
       renderResearcherDashboard(e);
     }

@@ -762,10 +762,12 @@ def researcher_login(data: LoginIn):
 
 @app.post("/api/researcher/access-codes", dependencies=[Depends(require_researcher)])
 def researcher_create_access_codes(data: AccessCodeBatchIn):
+    init_db()
     return {"codes": create_access_codes(data.count)}
 
 @app.get("/api/researcher/overview", dependencies=[Depends(require_researcher)])
 def overview():
+    init_db()
     with connect() as conn:
         participants = [dict(r) for r in conn.execute("SELECT * FROM participants ORDER BY created_at DESC").fetchall()]
         sessions = [dict(r) for r in conn.execute("SELECT * FROM conversation_assignments ORDER BY participant_id, conversation_order ASC").fetchall()]
@@ -784,6 +786,7 @@ def participant_detail(participant_id: str):
 
 @app.get("/api/researcher/export.csv", dependencies=[Depends(require_researcher)])
 def export_csv():
+    init_db()
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow([

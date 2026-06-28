@@ -23,8 +23,26 @@ function htmlEscape(s) {
   return String(s ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch]));
 }
 async function api(path, options = {}) {
-  const res = await fetch(API + path, { headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options });
-  if (!res.ok) throw new Error(await res.text());
+  const res = await fetch(API + path, {
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    ...options
+  });
+
+  if (!res.ok) {
+    let message = await res.text();
+
+    try {
+      const parsed = JSON.parse(message);
+      message = parsed.detail || message;
+    } catch {}
+
+    if (message === 'Wrong password') {
+      message = 'Wrong password. Please try again';
+    }
+
+    throw new Error(message);
+  }
+
   return res.json();
 }
 function renderProgressFromServer(progress) {
@@ -913,11 +931,10 @@ function renderDone() {
   app.innerHTML = `<div class="thank-you"><div class="thank-you-check">✓</div><h2>Thank you!</h2><p>Your responses have been submitted successfully.</p></div>`;
 }
 function renderResearcherLogin(err = '') {
-  if (participantLabel) participantLabel.textContent = 'Researcher area';
   const logout = document.getElementById('participantLogoutButton');
   if (logout) logout.remove();
 
-  app.innerHTML = `<h2>Researcher login</h2><p class="muted">This page is protected by the backend. Changing the URL is not enough to access participant data.</p><label>Password<input type="password" id="password"></label>${err ? errorBox(err) : ''}` + actions('<button id="login">Log in</button>');
+  app.innerHTML = `<h2>Researcher login</h2><label>Password<input type="password" id="password"></label>${err ? errorBox(err) : ''}` + actions('<button id="login">Log in</button>');
   document.getElementById('login').onclick = async () => {
     try { const res = await api('/api/researcher/login', { method:'POST', body: JSON.stringify({ password: document.getElementById('password').value }) }); localStorage.setItem('researcher_token', res.token); renderResearcherDashboard(); } catch(e) { renderResearcherLogin(e); }
   };

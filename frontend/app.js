@@ -1011,19 +1011,34 @@ async function renderResearcherDashboard(err = '') {
   document.getElementById('createCodes').onclick = async () => {
     const raw = prompt('How many participant codes should I create?', '10');
     const count = Number(raw);
+
     if (!Number.isFinite(count) || count < 1 || count > 200) {
       alert('Enter a number from 1 to 200.');
       return;
     }
 
     try {
-      const res = await researcherApi('/api/researcher/access-codes', {
+      const res = await fetch(`${API}/api/researcher/access-codes`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('researcher_token') || ''}`
+        },
         body: JSON.stringify({ count })
       });
 
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+
+      const data = await res.json();
+
       const box = document.getElementById('createdCodes');
-      box.innerHTML = `<div class="section"><h3>New participant codes</h3><p class="muted">Copy these now and email one code to each participant.</p><textarea readonly rows="8">${htmlEscape((res.codes || []).map(c => c.access_code).join('\n'))}</textarea></div>`;
+      box.innerHTML = `<div class="section">
+        <h3>New participant codes</h3>
+        <p class="muted">Copy these now and email one code to each participant.</p>
+        <textarea readonly rows="8">${htmlEscape((data.codes || []).map(c => c.access_code).join('\n'))}</textarea>
+      </div>`;
     } catch (e) {
       renderResearcherDashboard(e);
     }
@@ -1031,8 +1046,24 @@ async function renderResearcherDashboard(err = '') {
 
   document.getElementById('exportLink').onclick = async (ev) => {
     ev.preventDefault();
-    const res = await researcherApi('/api/researcher/export.csv');
-    const blob = await res.blob(); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'llm_engagement_export.csv'; a.click(); URL.revokeObjectURL(url);
+
+    const res = await fetch(`${API}/api/researcher/export.csv`, {
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('researcher_token') || ''}`
+      }
+    });
+
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'llm_engagement_export.csv';
+    a.click();
+    URL.revokeObjectURL(url);
   };
 }
 window.addEventListener('hashchange', route);

@@ -78,6 +78,41 @@ function setProgress(progress) {
   if (participantLabel) participantLabel.textContent = `Participant: ${progress.participant_id}`;
   renderParticipantLogoutButton();
 }
+function maskAccessCode(code) {
+  const raw = String(code || '').trim();
+  if (!raw) return '';
+  const compact = raw.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  if (compact.length <= 4) return '••••';
+  const visibleStart = compact.slice(0, 3);
+  const visibleEnd = compact.slice(-2);
+  const masked = `${visibleStart}${'•'.repeat(Math.max(2, compact.length - 5))}${visibleEnd}`;
+  if (raw.includes('-') && masked.length >= 9) {
+    return `${masked.slice(0, 1)}-${masked.slice(1, 5)}-${masked.slice(5)}`;
+  }
+  return masked;
+}
+
+function setupPasswordToggle(inputId, toggleId) {
+  const input = document.getElementById(inputId);
+  const toggle = document.getElementById(toggleId);
+  if (!input || !toggle) return;
+
+  const update = () => {
+    const showing = input.type === 'text';
+    toggle.setAttribute('aria-label', showing ? 'Hide value' : 'Show value');
+    toggle.setAttribute('title', showing ? 'Hide' : 'Show');
+    toggle.innerHTML = showing ? '🙈' : '👁';
+  };
+
+  toggle.onclick = () => {
+    input.type = input.type === 'password' ? 'text' : 'password';
+    input.focus();
+    update();
+  };
+
+  update();
+}
+
 function renderParticipantLogoutButton() {
   let btn = document.getElementById('participantLogoutButton');
   if (!state.participant || location.hash.replace('#', '') === 'researcher') {
@@ -89,9 +124,11 @@ function renderParticipantLogoutButton() {
     btn.id = 'participantLogoutButton';
     btn.className = 'participant-logout-button';
     btn.type = 'button';
-    btn.textContent = 'Log out';
+    btn.setAttribute('aria-label', 'Log out');
+    btn.setAttribute('title', 'Log out');
     document.body.appendChild(btn);
   }
+  btn.innerHTML = '<span class="logout-icon" aria-hidden="true">↩</span><span class="logout-text">Log out</span>';
   btn.onclick = clearParticipantSession;
 }
 function errorBox(err) { return `<p class="error">${htmlEscape(err.message || err)}</p>`; }
@@ -380,7 +417,10 @@ function renderParticipantLogin(err = '') {
     <p class="muted">Enter the anonymous participant code you received by email.</p>
     <div class="section">
       <label><strong>Participant code</strong>
-        <input id="participantCode" class="access-code-input" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" value="${htmlEscape(savedCode)}" placeholder="e.g. P001-A7K2">
+        <div class="password-field">
+          <input id="participantCode" class="access-code-input" type="password" autocomplete="off" autocapitalize="characters" spellcheck="false" value="${htmlEscape(savedCode)}" placeholder="e.g. P001-A7K2">
+          <button id="toggleParticipantCode" class="password-toggle" type="button" aria-label="Show value"></button>
+        </div>
       </label>
       <p class="muted">Use the same code if you return later or use a different device.</p>
     </div>
@@ -389,6 +429,7 @@ function renderParticipantLogin(err = '') {
 
   const input = document.getElementById('participantCode');
   const btn = document.getElementById('loginParticipant');
+  setupPasswordToggle('participantCode', 'toggleParticipantCode');
 
   input.addEventListener('input', () => {
     input.value = input.value.toUpperCase();
@@ -728,7 +769,7 @@ async function renderChat(err = '') {
     : 'Conversation';
 
   const inputHtml = done
-    ? `<p class="muted chat-complete">${htmlEscape(positionText)} complete.</p>`
+    ? `<p class="muted chat-complete">Conversation complete.</p>`
     : `<form class="chat-form" id="chatForm"><div class="message-composer"><textarea id="chatText" rows="1" inputmode="text" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" placeholder="Message"></textarea><button aria-label="Send message" type="submit" class="send-btn" disabled><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="M5.5 11.5L12 5l6.5 6.5"></path></svg></button></div></form>`;
 
   app.innerHTML = `<div class="${pageClass}">
@@ -738,7 +779,6 @@ async function renderChat(err = '') {
         <div class="phone-header">
           <div class="phone-avatar">A</div>
           <div class="phone-title">Alex</div>
-          <div class="muted" style="font-size:12px;margin-top:3px;">${htmlEscape(positionText)}</div>
         </div>
         <div class="phone-messages" id="messages">${visibleTranscript(data.transcript).map(chatMessageHtml).join('')}</div>
         ${inputHtml}
@@ -812,11 +852,10 @@ async function renderChat(err = '') {
 
       const agentParts = splitAgentText(latestAgent?.text || '');
 
-      const typing = messages.querySelector('.typing-row');
-      if (typing) typing.remove();
-
       for (let i = 0; i < agentParts.length; i++) {
-        if (i > 0) {
+        let typing = messages.querySelector('.typing-row');
+
+        if (!typing) {
           messages.insertAdjacentHTML(
             'beforeend',
             `<div class="message-row Agent typing-row">
@@ -829,15 +868,17 @@ async function renderChat(err = '') {
               </div>
             </div>`
           );
-
+          typing = messages.querySelector('.typing-row');
           scrollMessagesToBottom();
-          await sleep(interBubbleDelay());
+        }
 
-          const nextTyping = messages.querySelector('.typing-row');
-          if (nextTyping) nextTyping.remove();
+        if (i > 0) {
+          await sleep(interBubbleDelay());
         }
 
         await sleep(writingDelay(agentParts[i]));
+
+        if (typing) typing.remove();
 
         messages.insertAdjacentHTML(
           'beforeend',
@@ -849,6 +890,22 @@ async function renderChat(err = '') {
         );
 
         scrollMessagesToBottom();
+
+        if (i < agentParts.length - 1) {
+          messages.insertAdjacentHTML(
+            'beforeend',
+            `<div class="message-row Agent typing-row">
+              <div class="message-sender">Alex</div>
+              <div class="message-line">
+                <div class="agent-mini-avatar">A</div>
+                <div class="bubble Agent typing" aria-label="Alex is typing">
+                  <span></span><span></span><span></span>
+                </div>
+              </div>
+            </div>`
+          );
+          scrollMessagesToBottom();
+        }
       }
 
       const latestTurns = latestTranscript.length;
@@ -858,7 +915,7 @@ async function renderChat(err = '') {
         const formEl = document.getElementById('chatForm');
 
         if (formEl) {
-          formEl.outerHTML = `<p class="muted chat-complete">${htmlEscape(positionText)} complete.</p>`;
+          formEl.outerHTML = `<p class="muted chat-complete">Conversation complete.</p>`;
         }
 
         app.insertAdjacentHTML('beforeend', actions('<button id="finish">Next conversation</button>'));
@@ -946,11 +1003,14 @@ function renderResearcherLogin(err = '') {
 
     <label>
       Password
-      <input
-        type="password"
-        id="password"
-        autocomplete="current-password"
-      >
+      <div class="password-field">
+        <input
+          type="password"
+          id="password"
+          autocomplete="current-password"
+        >
+        <button id="toggleResearcherPassword" class="password-toggle" type="button" aria-label="Show password"></button>
+      </div>
     </label>
 
     ${err ? errorBox(err) : ''}
@@ -958,6 +1018,7 @@ function renderResearcherLogin(err = '') {
 
   const input = document.getElementById('password');
   const button = document.getElementById('login');
+  setupPasswordToggle('password', 'toggleResearcherPassword');
 
   async function login() {
     try {
@@ -1006,7 +1067,7 @@ async function renderResearcherDashboard(err = '') {
       <a href="${API}/api/researcher/export.csv" id="exportLink">Download CSV export</a>
     </div>
     <div id="createdCodes"></div>
-    <div class="table-wrap"><table><thead><tr><th>Participant</th><th>Access code</th><th>Created</th><th>Step</th><th>Completed</th></tr></thead><tbody>${data.participants.map(p => `<tr><td>${htmlEscape(p.participant_id)}</td><td>${htmlEscape(p.access_code || '')}</td><td>${htmlEscape(p.created_at)}</td><td>${htmlEscape(p.current_step)}</td><td>${p.completed ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table></div>`;
+    <div class="table-wrap"><table><thead><tr><th>Participant</th><th>Access code</th><th>Created</th><th>Step</th><th>Completed</th></tr></thead><tbody>${data.participants.map(p => `<tr><td>${htmlEscape(p.participant_id)}</td><td title="${htmlEscape(p.access_code ? 'Code hidden for privacy' : '')}">${htmlEscape(maskAccessCode(p.access_code || ''))}</td><td>${htmlEscape(p.created_at)}</td><td>${htmlEscape(p.current_step)}</td><td>${p.completed ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table></div>`;
 
   document.getElementById('createCodes').onclick = async () => {
     const raw = prompt('How many participant codes should I create?', '10');

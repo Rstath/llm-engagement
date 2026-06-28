@@ -747,11 +747,6 @@ body[data-step="chat"] .card {
   font-size: 20px;
   margin-bottom: 5px;
 }
-.phone-title {
-  color: #111;
-  font-size: 18px;
-  font-weight: 800;
-}
 .phone-messages {
   flex: 1;
   overflow-y: auto;
@@ -1185,4 +1180,79 @@ body[data-step="chat"] .card {
 }
 body[data-step="chat"] .participant-logout-button {
   display: none;
+}
+
+
+/* Participant logout and credential visibility */
+.participant-logout-button {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 1600;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  box-shadow: 0 10px 26px rgba(27,69,79,.20);
+}
+.participant-logout-button .logout-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+.participant-logout-button .logout-text {
+  line-height: 1;
+}
+
+.password-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.password-field input {
+  width: 100%;
+  padding-right: 48px;
+}
+.access-code-input {
+  text-transform: uppercase;
+}
+.password-toggle {
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+  font-size: 17px;
+}
+.password-toggle:hover {
+  background: var(--soft);
+}
+
+@media (max-width: 1024px) {
+  .participant-logout-button {
+    top: 10px;
+    right: 10px;
+    width: 42px;
+    height: 42px;
+    min-height: 42px;
+    padding: 0;
+    justify-content: center;
+  }
+  .participant-logout-button .logout-text {
+    display: none;
+  }
+  body[data-step="chat"] .participant-logout-button {
+    top: 12px;
+    right: 12px;
+    background: rgba(27,69,79,.92);
+  }
 }

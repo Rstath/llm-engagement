@@ -1011,7 +1011,6 @@ async function renderResearcherDashboard(err = '') {
   document.getElementById('createCodes').onclick = async () => {
     const raw = prompt('How many participant codes should I create?', '10');
     const count = Number(raw);
-
     if (!Number.isFinite(count) || count < 1 || count > 200) {
       alert('Enter a number from 1 to 200.');
       return;

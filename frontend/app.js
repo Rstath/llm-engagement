@@ -961,10 +961,15 @@ async function renderResearcherDashboard(err = '') {
     }
 
     try {
-      const res = await researcherApi('/api/researcher/access-codes', {
-        method: 'POST',
-        body: JSON.stringify({ count })
-      });
+      async function researcherApi(path, options = {}) {
+        return api(path, {
+          ...options,
+          headers: {
+            ...(options.headers || {}),
+            Authorization: `Bearer ${localStorage.getItem('researcher_token') || ''}`
+          }
+        });
+      }
 
       const box = document.getElementById('createdCodes');
       box.innerHTML = `<div class="section"><h3>New participant codes</h3><p class="muted">Copy these now and email one code to each participant.</p><textarea readonly rows="8">${htmlEscape((res.codes || []).map(c => c.access_code).join('\n'))}</textarea></div>`;

@@ -22,12 +22,19 @@ APP_SECRET = os.getenv("APP_SECRET", "dev-secret-change-me")
 RESEARCHER_PASSWORD = os.getenv("RESEARCHER_PASSWORD", "researcher-change-me")
 DB_PATH = os.getenv("DB_PATH", "human_experiment_data.db")
 ALLOWED_ORIGINS = [x.strip() for x in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5500").split(",") if x.strip()]
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", os.getenv("LOCAL_LLM_BASE_URL", "https://openrouter.ai/api/v1/chat/completions"))
+# Put only the API root here, not /chat/completions.
+# Examples:
+#   OpenRouter: LLM_BASE_URL=https://openrouter.ai/api/v1
+#   LM Studio:  LLM_BASE_URL=http://localhost:1234/v1
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", os.getenv("LOCAL_LLM_BASE_URL", "https://openrouter.ai/api/v1"))
 LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("OPENROUTER_API_KEY", os.getenv("LOCAL_LLM_API_KEY", "")))
-OPENROUTER_SITE_URL = os.getenv("OPENROUTER_SITE_URL", "")
+OPENROUTER_SITE_URL = os.getenv("OPENROUTER_SITE_URL", "http://localhost:5173")
 OPENROUTER_APP_NAME = os.getenv("OPENROUTER_APP_NAME", "LLM Engagement Study")
-SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "google/gemma-3n-e4b-it")
-MEDIUM_LLM_MODEL = os.getenv("MEDIUM_LLM_MODEL", "google/gemma-4-31b-it:free")
+
+# OpenRouter model IDs must exist exactly. These two are valid OpenRouter IDs.
+# If you run LM Studio, set these to the local model IDs shown in LM Studio.
+SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "google/gemma-3n-e4b-it:free")
+MEDIUM_LLM_MODEL = os.getenv("MEDIUM_LLM_MODEL", "google/gemma-3-27b-it")
 DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.7"))
 DEFAULT_MAX_AGENT_TOKENS = int(os.getenv("DEFAULT_MAX_AGENT_TOKENS", "130"))
 TARGET_TOTAL_TURNS = int(os.getenv("TARGET_TOTAL_TURNS", "14"))
@@ -169,21 +176,68 @@ def system_prompt(style_prompt: str, context: str = ""):
         base += "\nNo participant personality context is available."
     return base + "\nStyle: " + style_prompt
 
+def llm_chat_url() -> str:
+    """Return a correct OpenAI-compatible chat completions URL.
+
+    Accepts either:
+    - https://openrouter.ai/api/v1
+    - https://openrouter.ai/api/v1/chat/completions
+    - http://localhost:1234/v1
+    - http://localhost:1234/v1/chat/completions
+    """
+    base = (LLM_BASE_URL or "").strip().rstrip("/")
+    if not base:
+        base = "https://openrouter.ai/api/v1"
+    if base.endswith("/chat/completions"):
+        return base
+    return f"{base}/chat/completions"
+
+
+def clean_llm_text(text: str) -> str:
+    text = (text or "").strip()
+    # Keep agent messages mobile-like and avoid accidental essays.
+    text = " ".join(text.split())
+    if len(text) > 260:
+        text = text[:260].rsplit(" ", 1)[0].strip()
+    return text
+
+
 def call_llm(model_name, messages):
-    headers = {"Content-Type":"application/json"}
+    url = llm_chat_url()
+    headers = {"Content-Type": "application/json"}
+
     if LLM_API_KEY:
         headers["Authorization"] = f"Bearer {LLM_API_KEY}"
-    # OpenRouter recommends these optional headers for app attribution.
-    if "openrouter.ai" in LLM_BASE_URL:
-        if OPENROUTER_SITE_URL:
-            headers["HTTP-Referer"] = OPENROUTER_SITE_URL
+
+    # OpenRouter requires/recommends these app attribution headers.
+    if "openrouter.ai" in url:
+        headers["HTTP-Referer"] = OPENROUTER_SITE_URL or "http://localhost:5173"
         headers["X-Title"] = OPENROUTER_APP_NAME
-    payload = {"model": model_name, "messages": messages, "temperature": DEFAULT_TEMPERATURE, "max_tokens": DEFAULT_MAX_AGENT_TOKENS}
+
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "temperature": DEFAULT_TEMPERATURE,
+        "max_tokens": DEFAULT_MAX_AGENT_TOKENS,
+    }
+
     try:
-        r = requests.post(LLM_BASE_URL, headers=headers, json=payload, timeout=120)
-        r.raise_for_status()
+        r = requests.post(url, headers=headers, json=payload, timeout=120)
+
+        # Give a useful error instead of a vague 404/400.
+        if not r.ok:
+            detail = r.text[:800]
+            raise RuntimeError(
+                f"{r.status_code} from {url}. Model={model_name!r}. Response={detail}"
+            )
+
         data = r.json()
-        return data["choices"][0]["message"]["content"].strip()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        content = clean_llm_text(content)
+        if not content:
+            raise RuntimeError(f"Empty LLM response from {url}. Raw={str(data)[:800]}")
+        return content
+
     except Exception as exc:
         return f"[LLM server unavailable or misconfigured: {exc}]"
 

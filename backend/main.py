@@ -121,7 +121,7 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'active'
         );
 
-        -- New architecture: one participant has randomized conversation assignments. In test mode this file creates only 2 conversations.
+        -- New architecture: one participant has a randomized queue of 16 conversations.
         CREATE TABLE IF NOT EXISTS conversation_assignments (
             session_id TEXT PRIMARY KEY,
             participant_id TEXT NOT NULL,
@@ -319,26 +319,16 @@ def topic_preference_label(pid: str, topic_id: str) -> str:
 
 
 def generate_conversation_assignments(pid: str, reset_existing: bool = False):
-    """Create conversation assignments for one participant.
+    """Create the 16-condition randomized schedule for one participant.
 
-    TEST MODE used here:
-    - participant still selects 2 favorite + 2 least favorite topics
-    - only 2 conversations are created
-    - 1 conversation uses one favorite topic
-    - 1 conversation uses one least favorite topic
-    - after these 2 conversations, the participant reaches the thank-you page
-
-    For the full thesis run, replace this test block with the original 16-condition logic.
+    Design respected:
+    - 4 participant-selected topics = 2 most + 2 least interesting
+    - 2 LLM sizes = small, medium
+    - 2 personality-context settings = false, true
+    - 4 topics × 2 sizes × 2 context = 16 conversations
+    - each topic uses 2 equivalent scenario variants, balanced across its 4 conditions
     """
-    prog = get_progress(pid)
-    most_topics = list(prog.get("most_topics") or [])
-    least_topics = list(prog.get("least_topics") or [])
-
-    if len(most_topics) != 2 or len(least_topics) != 2:
-        raise HTTPException(
-            400,
-            "Participant must select exactly 2 most and 2 least interesting topics before chat assignment.",
-        )
+    selected_topics = selected_experiment_topics(pid)
 
     with connect() as conn:
         existing = conn.execute(
@@ -358,46 +348,27 @@ def generate_conversation_assignments(pid: str, reset_existing: bool = False):
             conn.execute("DELETE FROM conversation_assignments WHERE participant_id=?", (pid,))
             conn.execute("DELETE FROM experiment_sessions WHERE participant_id=?", (pid,))
 
-        favorite_topic = shuffled_for_participant(pid, "test-favorite-topic", most_topics)[0]
-        least_topic = shuffled_for_participant(pid, "test-least-topic", least_topics)[0]
-
-        test_rows = [
-            {
-                "topic_id": favorite_topic,
-                "topic_preference": "most",
-                "model_size": "small",
-                "personality_context_enabled": True,
-            },
-            {
-                "topic_id": least_topic,
-                "topic_preference": "least",
-                "model_size": "medium",
-                "personality_context_enabled": False,
-            },
-        ]
-
-        # Randomize whether the favorite or least topic appears first.
-        test_rows = shuffled_for_participant(pid, "test-two-conversation-order", test_rows)
-
         rows = []
-        for idx, row in enumerate(test_rows):
-            topic_id = row["topic_id"]
-            variation_id = stable_choice(
-                f"{pid}:{topic_id}:test-variant",
-                list(TOPICS[topic_id]["variations"].keys()),
-            )
-            model_size = row["model_size"]
-            rows.append({
-                "topic_id": topic_id,
-                "variation_id": variation_id,
-                "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
-                "topic_preference": row["topic_preference"],
-                "style_name": stable_choice(f"{pid}:{topic_id}:test-style", list(STYLE_PROMPTS.keys())),
-                "model_size": model_size,
-                "model_name": MEDIUM_LLM_MODEL if model_size == "medium" else SMALL_LLM_MODEL,
-                "personality_context_enabled": row["personality_context_enabled"],
-            })
+        for topic_id in selected_topics:
+            variations = shuffled_for_participant(pid, f"{topic_id}:variants", list(TOPICS[topic_id]["variations"].keys()))[:2]
+            combos = [("small", False), ("small", True), ("medium", False), ("medium", True)]
+            combos = shuffled_for_participant(pid, f"{topic_id}:model-context", combos)
+            # Use exactly two equivalent scenario variants per topic, each appearing twice.
+            variant_slots = shuffled_for_participant(pid, f"{topic_id}:variant-slots", [variations[0], variations[0], variations[1], variations[1]])
+            for idx, (model_size, personality_enabled) in enumerate(combos):
+                variation_id = variant_slots[idx]
+                rows.append({
+                    "topic_id": topic_id,
+                    "variation_id": variation_id,
+                    "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
+                    "topic_preference": topic_preference_label(pid, topic_id),
+                    "style_name": stable_choice(f"{pid}:{topic_id}:{idx}:style", list(STYLE_PROMPTS.keys())),
+                    "model_size": model_size,
+                    "model_name": MEDIUM_LLM_MODEL if model_size == "medium" else SMALL_LLM_MODEL,
+                    "personality_context_enabled": personality_enabled,
+                })
 
+        rows = shuffled_for_participant(pid, "conversation-order", rows)
         for order, row in enumerate(rows, start=1):
             conn.execute(
                 """
@@ -508,7 +479,16 @@ Core behaviour:
 - Do not describe or announce the scenario. Ease into it smoothly like a real chat.
 - Respond to the participant's latest message, not to the scenario wording.
 - Do not repeat the previous Alex message or the same idea in different words.
+- Every reply should give the participant something easy to react to.
+- Avoid vague filler like "good point", "yeah true", "fair enough", "its tricky", or "it depends" unless you add a concrete opinion right after.
+- After agreeing, add one clear opinion, observation, preference, or small personal reaction.
+- Have your own small opinion. Do not only mirror the participant.
+- Slight friendly disagreement is okay.
+- Every message should move the conversation forward with one new detail, preference, reaction, or experience.
+- Avoid sounding too uncertain too often. Prefer "id go for", "id rather", "i usually" over constant "maybe", "i guess", or "probably".
+- Never explain your reasoning like an assistant. Do not teach, summarize, or give balanced pros and cons. Just chat.
 - If the conversation is ending, give one short natural closing only.
+- When ending, do not repeat yourself, do not summarize the discussion, and do not suddenly thank the participant.
 
 Mobile texting style:
 - Write in lowercase.
@@ -523,6 +503,8 @@ Mobile texting style:
 Questions:
 - Do not ask frequent questions.
 - Most replies should be reactions, opinions, or small additions.
+- Only ask a question when the conversation would naturally stop without one.
+- Otherwise make a statement instead.
 - Ask at most one question only when it genuinely helps.
 - If the previous Alex message asked a question, do not ask another question now.
 - Avoid interview style and repeated "what about you" / "how about you".
@@ -591,6 +573,21 @@ def clean_llm_text(text: str) -> str:
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
+
+    # Reduce vague chatbot-like acknowledgements that confuse participants.
+    vague_prefixes = [
+        "oh yeah thats a good point ",
+        "yeah thats a good point ",
+        "thats a good point ",
+        "good point ",
+        "yeah true ",
+        "fair enough ",
+        "true true ",
+    ]
+    for prefix in vague_prefixes:
+        if text.startswith(prefix) and len(text) > len(prefix) + 8:
+            text = text[len(prefix):].strip()
+            break
 
     text = text.replace(";", "").replace(":", "")
     text = re.sub(r"\s*,\s*", " ", text)
@@ -687,9 +684,12 @@ def make_reply(pid, assignment, transcript):
     no_question = previous_agent_asked_question(transcript)
     instruction = (
         "Continue naturally as Alex. Stay strictly on the scenario. "
-        "Reply to the participant's latest message only. "
+        "Reply mainly to the participant's latest message, but keep the last 2-3 turns in mind so the chat feels continuous. "
+        "Each reply should answer what the participant said, add one new concrete thought, and make it obvious how they could naturally continue. "
         "Do not restate the scenario. Do not list options unless the participant already listed them. "
         "Do not offer links, checking, booking, planning, or fictional actions. "
+        "Avoid vague filler like good point, yeah true, fair enough, its tricky, or it depends unless followed by a clear opinion. "
+        "Have your own small opinion or preference. Do not just mirror the participant. "
         "Use lowercase casual mobile texting. Say less. Minimal punctuation. "
         "Most of the time send one short thought only. "
         "Use <split> only rarely if there are two separate tiny thoughts."

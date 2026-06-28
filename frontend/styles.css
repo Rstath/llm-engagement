@@ -1178,10 +1178,6 @@ body[data-step="chat"] .card {
   overflow-x: auto;
   color: var(--text);
 }
-body[data-step="chat"] .participant-logout-button {
-  display: none;
-}
-
 
 /* Participant logout and credential visibility */
 .participant-logout-button {

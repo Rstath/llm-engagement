@@ -350,18 +350,23 @@ def generate_conversation_assignments(pid: str, reset_existing: bool = False):
         rows = []
         for topic_id in selected_topics:
             variations = shuffled_for_participant(pid, f"{topic_id}:variants", list(TOPICS[topic_id]["variations"].keys()))[:2]
-            combos = [("small", False), ("small", True), ("medium", False), ("medium", True)]
-            combos = shuffled_for_participant(pid, f"{topic_id}:model-context", combos)
-            # Use exactly two equivalent scenario variants per topic, each appearing twice.
-            variant_slots = shuffled_for_participant(pid, f"{topic_id}:variant-slots", [variations[0], variations[0], variations[1], variations[1]])
-            for idx, (model_size, personality_enabled) in enumerate(combos):
-                variation_id = variant_slots[idx]
+            test_combos = [
+                ("small", False),
+                ("medium", False),
+                ("small", True),
+                ("medium", True),
+            ]
+
+            for idx, topic_id in enumerate(selected_topics):
+                model_size, personality_enabled = test_combos[idx]
+                variation_id = stable_choice(f"{pid}:{topic_id}:test-variant", list(TOPICS[topic_id]["variations"].keys()))
+
                 rows.append({
                     "topic_id": topic_id,
                     "variation_id": variation_id,
                     "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
                     "topic_preference": topic_preference_label(pid, topic_id),
-                    "style_name": stable_choice(f"{pid}:{topic_id}:{idx}:style", list(STYLE_PROMPTS.keys())),
+                    "style_name": stable_choice(f"{pid}:{topic_id}:test-style", list(STYLE_PROMPTS.keys())),
                     "model_size": model_size,
                     "model_name": MEDIUM_LLM_MODEL if model_size == "medium" else SMALL_LLM_MODEL,
                     "personality_context_enabled": personality_enabled,

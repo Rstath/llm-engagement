@@ -894,7 +894,7 @@ body[data-step="chat"] .card {
   }
   .native-chat-screen .phone-messages {
     min-height: 0;
-    padding-bottom: calc(14px + var(--keyboard-offset, 0px));
+    padding-bottom: 14px;
   }
   .native-chat-screen .chat-form {
     position: sticky;
@@ -1065,14 +1065,14 @@ body[data-step="chat"] .card {
     flex: 1 1 auto !important;
     min-height: 0 !important;
     overflow-y: auto !important;
-    padding-bottom: calc(110px + var(--keyboard-offset, 0px)) !important;
+    padding-bottom: 14px !important;
   }
 
   .native-chat-screen .chat-form {
-    position: fixed !important;
-    left: 0 !important;
-    right: 0 !important;
-    bottom: var(--keyboard-offset, 0px) !important;
+    position: sticky !important;
+    left: auto !important;
+    right: auto !important;
+    bottom: 0 !important;
     z-index: 1000 !important;
     padding-bottom: calc(8px + env(safe-area-inset-bottom)) !important;
     transform: translateZ(0);
@@ -1083,67 +1083,12 @@ body[data-step="chat"] .card {
   }
 }
 
-/* Android keyboard fallback: spacer below composer, then scroll composer above keyboard */
-@media (max-width: 1024px) {
-  body.android-keyboard-open[data-step="chat"] {
-    height: auto !important;
-    min-height: 100svh !important;
-    min-height: 100dvh !important;
-    overflow-y: auto !important;
-  }
-
-  body.android-keyboard-open .app-shell,
-  body.android-keyboard-open .card,
-  body.android-keyboard-open .native-chat-shell,
-  body.android-keyboard-open .native-chat-screen {
-    height: auto !important;
-    min-height: 100svh !important;
-    min-height: 100dvh !important;
-    overflow: visible !important;
-  }
-
-  body.android-keyboard-open .native-chat-screen {
-    display: block !important;
-  }
-
-  body.android-keyboard-open .native-chat-screen .phone-header {
-    position: sticky !important;
-    top: 0 !important;
-  }
-
-  body.android-keyboard-open .native-chat-screen .phone-messages {
-    min-height: calc(100svh - 170px) !important;
-    min-height: calc(100dvh - 170px) !important;
-    max-height: none !important;
-    overflow: visible !important;
-    padding-bottom: 16px !important;
-  }
-
-  body.android-keyboard-open .native-chat-screen .chat-form {
-    position: relative !important;
-    left: auto !important;
-    right: auto !important;
-    bottom: auto !important;
-    width: 100% !important;
-    z-index: 1000 !important;
-  }
-
-  .android-keyboard-spacer {
-    display: block;
-    width: 100%;
-    height: var(--android-keyboard-spacer, 320px);
-    flex: 0 0 var(--android-keyboard-spacer, 320px);
-    pointer-events: none;
-  }
-}
-
-
-
-/* Final Android/native keyboard fix
-   Use one sticky-flex mobile chat layout and remove JS keyboard-offset/spacer behavior. */
+/* Clean native mobile chat behavior: no Android spacer, no fixed keyboard offset hacks. */
 @media (max-width: 1024px) {
   body[data-step="chat"] {
+    height: var(--native-chat-height, 100dvh) !important;
     overflow: hidden !important;
+    overscroll-behavior: none;
   }
 
   body[data-step="chat"] .app-shell,
@@ -1152,9 +1097,9 @@ body[data-step="chat"] .card {
   .native-chat-shell,
   .native-chat-screen {
     width: 100% !important;
-    height: 100dvh !important;
-    min-height: 100dvh !important;
-    max-height: 100dvh !important;
+    height: var(--native-chat-height, 100dvh) !important;
+    min-height: var(--native-chat-height, 100dvh) !important;
+    max-height: var(--native-chat-height, 100dvh) !important;
     margin: 0 !important;
     padding: 0 !important;
     overflow: hidden !important;
@@ -1167,9 +1112,9 @@ body[data-step="chat"] .card {
   }
 
   .native-chat-screen .phone-header {
-    position: sticky !important;
-    top: 0 !important;
+    position: relative !important;
     flex: 0 0 76px !important;
+    top: auto !important;
     z-index: 8 !important;
   }
 
@@ -1197,18 +1142,5 @@ body[data-step="chat"] .card {
 
   .android-keyboard-spacer {
     display: none !important;
-    height: 0 !important;
-    flex-basis: 0 !important;
-  }
-
-  body.android-keyboard-open .native-chat-screen,
-  body.android-keyboard-open .native-chat-screen .phone-messages,
-  body.android-keyboard-open .native-chat-screen .chat-form {
-    display: flex;
-    overflow: inherit;
-    position: inherit;
-    min-height: inherit;
-    max-height: inherit;
-    padding-bottom: inherit;
   }
 }

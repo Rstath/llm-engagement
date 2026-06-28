@@ -202,96 +202,38 @@ function isAndroidDevice() {
   return /Android/i.test(navigator.userAgent || '');
 }
 
-function getAndroidKeyboardSpacerHeight() {
-  if (window.visualViewport) {
-    const keyboard = Math.max(
-      0,
-      window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop
-    );
-    if (keyboard > 80) return keyboard + 28;
-  }
-  return Math.min(360, Math.max(260, Math.round(window.innerHeight * 0.42)));
-}
-
-function ensureAndroidKeyboardSpacer() {
-  if (!isAndroidDevice() || isDesktopDevice()) return;
-
-  const form = document.getElementById('chatForm');
-  const textEl = document.getElementById('chatText');
-  if (!form || !textEl) return;
-
-  document.body.classList.add('android-keyboard-open');
-
-  let spacer = document.getElementById('androidKeyboardSpacer');
-  if (!spacer) {
-    spacer = document.createElement('div');
-    spacer.id = 'androidKeyboardSpacer';
-    spacer.className = 'android-keyboard-spacer';
-    form.insertAdjacentElement('afterend', spacer);
-  }
-
-  const spacerHeight = getAndroidKeyboardSpacerHeight();
-  document.documentElement.style.setProperty('--android-keyboard-spacer', `${spacerHeight}px`);
-
-  requestAnimationFrame(() => {
-    form.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    setTimeout(() => form.scrollIntoView({ block: 'center', behavior: 'smooth' }), 120);
-    setTimeout(() => form.scrollIntoView({ block: 'center', behavior: 'smooth' }), 450);
-  });
-}
-
-function removeAndroidKeyboardSpacer() {
-  if (!isAndroidDevice()) return;
-  setTimeout(() => {
-    if (document.activeElement && document.activeElement.id === 'chatText') return;
-    document.body.classList.remove('android-keyboard-open');
-    const spacer = document.getElementById('androidKeyboardSpacer');
-    if (spacer) spacer.remove();
-    document.documentElement.style.removeProperty('--android-keyboard-spacer');
-  }, 220);
-}
-
 function keepNativeInputVisible() {
   if (isDesktopDevice()) return;
 
-  const applyKeyboardOffset = () => {
-    let keyboard = 0;
+  const root = document.documentElement;
 
-    if (window.visualViewport) {
-      keyboard = Math.max(
-        0,
-        window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop
-      );
-    }
+  const setViewportHeight = () => {
+    const vv = window.visualViewport;
+    const height = vv ? vv.height : window.innerHeight;
+    root.style.setProperty('--app-viewport-height', `${height}px`);
 
-    document.documentElement.style.setProperty('--keyboard-offset', `${keyboard}px`);
-
-    const form = document.getElementById('chatForm');
     const textEl = document.getElementById('chatText');
+    const messages = document.getElementById('messages');
 
-    if (form && textEl && document.activeElement === textEl) {
-      if (isAndroidDevice()) {
-        ensureAndroidKeyboardSpacer();
-      } else {
-        requestAnimationFrame(() => {
-          form.scrollIntoView({ block: 'end', behavior: 'smooth' });
-          setTimeout(scrollMessagesToBottom, 60);
-        });
-      }
+    if (textEl && document.activeElement === textEl) {
+      requestAnimationFrame(() => {
+        if (messages) messages.scrollTop = messages.scrollHeight;
+        textEl.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+      });
     }
   };
 
   if (window.visualViewport) {
-    window.visualViewport.removeEventListener('resize', applyKeyboardOffset);
-    window.visualViewport.removeEventListener('scroll', applyKeyboardOffset);
-    window.visualViewport.addEventListener('resize', applyKeyboardOffset);
-    window.visualViewport.addEventListener('scroll', applyKeyboardOffset);
+    window.visualViewport.removeEventListener('resize', setViewportHeight);
+    window.visualViewport.removeEventListener('scroll', setViewportHeight);
+    window.visualViewport.addEventListener('resize', setViewportHeight);
+    window.visualViewport.addEventListener('scroll', setViewportHeight);
   }
 
-  window.removeEventListener('resize', applyKeyboardOffset);
-  window.addEventListener('resize', applyKeyboardOffset);
+  window.removeEventListener('resize', setViewportHeight);
+  window.addEventListener('resize', setViewportHeight);
 
-  applyKeyboardOffset();
+  setViewportHeight();
 }
 
 async function init() {
@@ -551,7 +493,7 @@ async function renderChat(err = '') {
     </svg></span><span class="battery"><span class="battery-level"></span></span></span></div>` : '';
   const inputHtml = done
     ? '<p class="muted chat-complete">Conversation complete.</p>'
-    : `<form class="chat-form" id="chatForm"><div class="message-composer"><textarea id="chatText" rows="1" inputmode="text" autocomplete="off" autocapitalize="sentences" placeholder="Message"></textarea><button aria-label="Send message" type="submit" class="send-btn" disabled><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="M5.5 11.5L12 5l6.5 6.5"></path></svg></button></div></form>`;
+    : `<form class="chat-form" id="chatForm"><div class="message-composer"><textarea id="chatText" rows="1" inputmode="text" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" placeholder="Message"></textarea><button aria-label="Send message" type="submit" class="send-btn" disabled><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="M5.5 11.5L12 5l6.5 6.5"></path></svg></button></div></form>`;
 
   app.innerHTML = `<div class="${pageClass}">
     <div class="${shellClass}">
@@ -576,6 +518,15 @@ async function renderChat(err = '') {
   }, 30000);
   const form = document.getElementById('chatForm');
   const textEl = document.getElementById('chatText');
+  textEl.addEventListener('focus', () => {
+  document.body.classList.add('chat-input-focused');
+  keepNativeInputVisible();
+  setTimeout(scrollMessagesToBottom, 80);
+});
+
+textEl.addEventListener('blur', () => {
+  document.body.classList.remove('chat-input-focused');
+});
   const sendBtn = form ? form.querySelector('.send-btn') : null;
   const sendMessage = async () => {
     const text = textEl.value.trim();
@@ -622,9 +573,12 @@ async function renderChat(err = '') {
       setTimeout(scrollMessagesToBottom, 30);
     });
     textEl.addEventListener('keydown', async (ev) => {
-      if (isDesktopDevice() && ev.key === 'Enter' && !ev.shiftKey) {
+      if (ev.key === 'Enter' && !ev.shiftKey) {
         ev.preventDefault();
-        await sendMessage();
+
+        if (!sendBtn.disabled) {
+          form.requestSubmit();
+        }
       }
     });
     textEl.addEventListener('focus', () => {

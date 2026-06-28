@@ -480,6 +480,13 @@ Core behaviour:
 - Respond to the participant's latest message, not to the scenario wording.
 - Do not repeat the previous Alex message or the same idea in different words.
 - Every reply should give the participant something easy to react to.
+For the FIRST message only:
+- Never react to imaginary previous messages.
+- Never start with agreement.
+- Never start with sympathy.
+- Never start with "yeah", "exactly", "same", "good point", "fair enough", "thats annoying", "its tricky".
+- Introduce the situation naturally first.
+- Make it obvious what the chat is about within the first one or two bubbles.
 - Avoid vague filler like "good point", "yeah true", "fair enough", "its tricky", or "it depends" unless you add a concrete opinion right after.
 - After agreeing, add one clear opinion, observation, preference, or small personal reaction.
 - Have your own small opinion. Do not only mirror the participant.
@@ -576,12 +583,17 @@ def clean_llm_text(text: str) -> str:
 
     # Reduce vague chatbot-like acknowledgements that confuse participants.
     vague_prefixes = [
-        "oh yeah thats a good point ",
-        "yeah thats a good point ",
-        "thats a good point ",
+        "oh no ",
+        "oh yeah ",
+        "yeah ",
+        "exactly ",
+        "same ",
         "good point ",
-        "yeah true ",
         "fair enough ",
+        "thats annoying ",
+        "thats frustrating ",
+        "its tricky ",
+        "yeah true ",
         "true true ",
     ]
     for prefix in vague_prefixes:
@@ -661,6 +673,27 @@ def previous_agent_asked_question(transcript: List[Dict[str, Any]]) -> bool:
             return "?" in str(turn.get("text", ""))
     return False
 
+def fallback_opening_for_topic(assignment):
+    topic_id = assignment["topic_id"]
+    prompt = assignment["topic_prompt"].lower()
+
+    if topic_id == "T1":
+        return "way too many options at the supermarket rn"
+    if topic_id == "T2":
+        return "my friend wants to order food i barely know 😅"
+    if topic_id == "T3":
+        return "im stuck between two online shops rn"
+    if topic_id == "T4":
+        return "my mornings are always a bit rushed"
+    if topic_id == "T5":
+        return "finally got home after a long day"
+    if topic_id == "T6":
+        return "my order came wrong and im annoyed tbh"
+    if topic_id == "T7":
+        return "thinking about having a few friends over"
+    if topic_id == "T8":
+        return "kinda wanna plan a short trip in greece"
+    return "need ur opinion on sth"
 
 def make_opening(pid, assignment):
     ctx = personality_context(pid) if assignment["personality_context_enabled"] else ""
@@ -669,15 +702,59 @@ def make_opening(pid, assignment):
         {
             "role": "user",
             "content": (
-                "Start a smooth casual mobile chat inspired by the scenario. "
-                "Do not summarize it. Do not list options. Do not sound like a questionnaire. "
-                "Use lowercase. Keep it very short. Usually one bubble only. "
-                "Ask at most one easy natural question, or just make a small comment.\n"
-                "Scenario: " + assignment["topic_prompt"]
+                "Generate ONLY the first message(s) of a new mobile conversation.\n\n"
+
+                "The participant has NOT seen the scenario.\n"
+                "Never assume they know what happened.\n\n"
+
+                "Start by naturally introducing the situation.\n"
+                "Do NOT react to something that hasn't been mentioned yet.\n"
+                "Do NOT start with agreement.\n"
+                "Do NOT start with sympathy.\n"
+                "Do NOT start with 'good point', 'yeah', 'thats annoying', 'same', 'exactly', etc.\n\n"
+                "The first message MUST mention one concrete element from the scenario (e.g. cheese, supermarket, online shop, order, dinner, morning, trip)."
+                "Do not start with an emotion or reaction."
+                "Start with the situation itself."
+
+                "Good openings:\n"
+                "- need ur opinion 😅 <split> im looking at 2 online shops rn\n"
+                "- way too many cheeses here lol\n"
+                "- went out for dinner earlier\n"
+                "- my mornings are always rushed 😂\n\n"
+
+                "Bad openings:\n"
+                "- thats frustrating\n"
+                "- yeah id do the same\n"
+                "- exactly\n"
+                "- good point\n"
+                "- price vs reviews is tricky\n\n"
+
+                "The participant should immediately understand what the conversation is about.\n"
+                "Do not explain the scenario.\n"
+                "Just ease into it naturally.\n\n"
+
+                "Scenario:\n"
+                + assignment["topic_prompt"]
             ),
         },
     ]
-    return call_llm(assignment["model_name"], messages)
+    opening = call_llm(assignment["model_name"], messages)
+
+    bad_starts = (
+        "yeah",
+        "exactly",
+        "same",
+        "good point",
+        "fair enough",
+        "thats frustrating",
+        "its tricky",
+        "oh no",
+    )
+
+    if opening.lower().startswith(bad_starts):
+        return fallback_opening_for_topic(assignment)
+
+    return opening
 
 def make_reply(pid, assignment, transcript):
     ctx = personality_context(pid) if assignment["personality_context_enabled"] else ""

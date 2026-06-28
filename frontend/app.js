@@ -92,25 +92,73 @@ function maskAccessCode(code) {
   return masked;
 }
 
+const EYE_OPEN = `
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="20"
+     height="20"
+     viewBox="0 0 24 24"
+     fill="none"
+     stroke="currentColor"
+     stroke-width="2"
+     stroke-linecap="round"
+     stroke-linejoin="round">
+
+  <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/>
+  <circle cx="12" cy="12" r="3"/>
+</svg>
+`;
+
+const EYE_CLOSED = `
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="20"
+     height="20"
+     viewBox="0 0 24 24"
+     fill="none"
+     stroke="currentColor"
+     stroke-width="2"
+     stroke-linecap="round"
+     stroke-linejoin="round">
+
+  <path d="M17.94 17.94A10.9 10.9 0 0 1 12 19C5 19 1 12 1 12a21.8 21.8 0 0 1 5.06-5.94"/>
+  <path d="M9.9 4.24A10.94 10.94 0 0 1 12 5c7 0 11 7 11 7a21.7 21.7 0 0 1-3.22 4.24"/>
+  <path d="M1 1l22 22"/>
+  <path d="M9.88 9.88A3 3 0 1 0 14.12 14.12"/>
+</svg>
+`;
+
 function setupPasswordToggle(inputId, toggleId) {
-  const input = document.getElementById(inputId);
-  const toggle = document.getElementById(toggleId);
-  if (!input || !toggle) return;
 
-  const update = () => {
-    const showing = input.type === 'text';
-    toggle.setAttribute('aria-label', showing ? 'Hide value' : 'Show value');
-    toggle.setAttribute('title', showing ? 'Hide' : 'Show');
-    toggle.innerHTML = showing ? '🙈' : '👁';
-  };
+    const input = document.getElementById(inputId);
+    const toggle = document.getElementById(toggleId);
 
-  toggle.onclick = () => {
-    input.type = input.type === 'password' ? 'text' : 'password';
-    input.focus();
+    if (!input || !toggle) return;
+
+    function update() {
+
+        const visible = input.type === "text";
+
+        toggle.innerHTML = visible ? EYE_CLOSED : EYE_OPEN;
+
+        toggle.title = visible ? "Hide" : "Show";
+        toggle.setAttribute(
+            "aria-label",
+            visible ? "Hide password" : "Show password"
+        );
+    }
+
+    toggle.onclick = () => {
+
+        input.type =
+            input.type === "password"
+                ? "text"
+                : "password";
+
+        input.focus();
+
+        update();
+    };
+
     update();
-  };
-
-  update();
 }
 
 function renderParticipantLogoutButton() {

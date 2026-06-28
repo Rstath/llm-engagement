@@ -121,7 +121,7 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'active'
         );
 
-        -- New architecture: one participant has a randomized queue of 16 conversations.
+        -- New architecture: one participant has randomized conversation assignments. In test mode this file creates only 2 conversations.
         CREATE TABLE IF NOT EXISTS conversation_assignments (
             session_id TEXT PRIMARY KEY,
             participant_id TEXT NOT NULL,
@@ -319,16 +319,26 @@ def topic_preference_label(pid: str, topic_id: str) -> str:
 
 
 def generate_conversation_assignments(pid: str, reset_existing: bool = False):
-    """Create the 16-condition randomized schedule for one participant.
+    """Create conversation assignments for one participant.
 
-    Design respected:
-    - 4 participant-selected topics = 2 most + 2 least interesting
-    - 2 LLM sizes = small, medium
-    - 2 personality-context settings = false, true
-    - 4 topics × 2 sizes × 2 context = 16 conversations
-    - each topic uses 2 equivalent scenario variants, balanced across its 4 conditions
+    TEST MODE used here:
+    - participant still selects 2 favorite + 2 least favorite topics
+    - only 2 conversations are created
+    - 1 conversation uses one favorite topic
+    - 1 conversation uses one least favorite topic
+    - after these 2 conversations, the participant reaches the thank-you page
+
+    For the full thesis run, replace this test block with the original 16-condition logic.
     """
-    selected_topics = selected_experiment_topics(pid)
+    prog = get_progress(pid)
+    most_topics = list(prog.get("most_topics") or [])
+    least_topics = list(prog.get("least_topics") or [])
+
+    if len(most_topics) != 2 or len(least_topics) != 2:
+        raise HTTPException(
+            400,
+            "Participant must select exactly 2 most and 2 least interesting topics before chat assignment.",
+        )
 
     with connect() as conn:
         existing = conn.execute(
@@ -348,27 +358,46 @@ def generate_conversation_assignments(pid: str, reset_existing: bool = False):
             conn.execute("DELETE FROM conversation_assignments WHERE participant_id=?", (pid,))
             conn.execute("DELETE FROM experiment_sessions WHERE participant_id=?", (pid,))
 
-        rows = []
-        for topic_id in selected_topics:
-            variations = shuffled_for_participant(pid, f"{topic_id}:variants", list(TOPICS[topic_id]["variations"].keys()))[:2]
-            combos = [("small", False), ("small", True), ("medium", False), ("medium", True)]
-            combos = shuffled_for_participant(pid, f"{topic_id}:model-context", combos)
-            # Use exactly two equivalent scenario variants per topic, each appearing twice.
-            variant_slots = shuffled_for_participant(pid, f"{topic_id}:variant-slots", [variations[0], variations[0], variations[1], variations[1]])
-            for idx, (model_size, personality_enabled) in enumerate(combos):
-                variation_id = variant_slots[idx]
-                rows.append({
-                    "topic_id": topic_id,
-                    "variation_id": variation_id,
-                    "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
-                    "topic_preference": topic_preference_label(pid, topic_id),
-                    "style_name": stable_choice(f"{pid}:{topic_id}:{idx}:style", list(STYLE_PROMPTS.keys())),
-                    "model_size": model_size,
-                    "model_name": MEDIUM_LLM_MODEL if model_size == "medium" else SMALL_LLM_MODEL,
-                    "personality_context_enabled": personality_enabled,
-                })
+        favorite_topic = shuffled_for_participant(pid, "test-favorite-topic", most_topics)[0]
+        least_topic = shuffled_for_participant(pid, "test-least-topic", least_topics)[0]
 
-        rows = shuffled_for_participant(pid, "conversation-order", rows)
+        test_rows = [
+            {
+                "topic_id": favorite_topic,
+                "topic_preference": "most",
+                "model_size": "small",
+                "personality_context_enabled": True,
+            },
+            {
+                "topic_id": least_topic,
+                "topic_preference": "least",
+                "model_size": "medium",
+                "personality_context_enabled": False,
+            },
+        ]
+
+        # Randomize whether the favorite or least topic appears first.
+        test_rows = shuffled_for_participant(pid, "test-two-conversation-order", test_rows)
+
+        rows = []
+        for idx, row in enumerate(test_rows):
+            topic_id = row["topic_id"]
+            variation_id = stable_choice(
+                f"{pid}:{topic_id}:test-variant",
+                list(TOPICS[topic_id]["variations"].keys()),
+            )
+            model_size = row["model_size"]
+            rows.append({
+                "topic_id": topic_id,
+                "variation_id": variation_id,
+                "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
+                "topic_preference": row["topic_preference"],
+                "style_name": stable_choice(f"{pid}:{topic_id}:test-style", list(STYLE_PROMPTS.keys())),
+                "model_size": model_size,
+                "model_name": MEDIUM_LLM_MODEL if model_size == "medium" else SMALL_LLM_MODEL,
+                "personality_context_enabled": row["personality_context_enabled"],
+            })
+
         for order, row in enumerate(rows, start=1):
             conn.execute(
                 """

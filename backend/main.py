@@ -348,27 +348,37 @@ def generate_conversation_assignments(pid: str, reset_existing: bool = False):
             conn.execute("DELETE FROM conversation_assignments WHERE participant_id=?", (pid,))
             conn.execute("DELETE FROM experiment_sessions WHERE participant_id=?", (pid,))
 
-        rows = []
-        for topic_id in selected_topics:
-            variations = shuffled_for_participant(pid, f"{topic_id}:variants", list(TOPICS[topic_id]["variations"].keys()))[:2]
-            combos = [("small", False), ("small", True), ("medium", False), ("medium", True)]
-            combos = shuffled_for_participant(pid, f"{topic_id}:model-context", combos)
-            # Use exactly two equivalent scenario variants per topic, each appearing twice.
-            variant_slots = shuffled_for_participant(pid, f"{topic_id}:variant-slots", [variations[0], variations[0], variations[1], variations[1]])
-            for idx, (model_size, personality_enabled) in enumerate(combos):
-                variation_id = variant_slots[idx]
-                rows.append({
-                    "topic_id": topic_id,
-                    "variation_id": variation_id,
-                    "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
-                    "topic_preference": topic_preference_label(pid, topic_id),
-                    "style_name": stable_choice(f"{pid}:{topic_id}:{idx}:style", list(STYLE_PROMPTS.keys())),
-                    "model_size": model_size,
-                    "model_name": MEDIUM_LLM_MODEL if model_size == "medium" else SMALL_LLM_MODEL,
-                    "personality_context_enabled": personality_enabled,
-                })
+            rows = []
 
-        rows = shuffled_for_participant(pid, "conversation-order", rows)
+            # ---------- TEST MODE ----------
+            # Only ONE conversation is generated.
+            # It uses the first "most interesting" topic,
+            # medium model with personality context enabled.
+
+            prog = get_progress(pid)
+            topic_id = prog["most_topics"][0]
+
+            variation_id = stable_choice(
+                f"{pid}:{topic_id}:test",
+                list(TOPICS[topic_id]["variations"].keys()),
+            )
+
+            rows.append({
+                "topic_id": topic_id,
+                "variation_id": variation_id,
+                "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
+                "topic_preference": "most",
+                "style_name": stable_choice(
+                    f"{pid}:{topic_id}:style",
+                    list(STYLE_PROMPTS.keys()),
+                ),
+                "model_size": "medium",
+                "model_name": MEDIUM_LLM_MODEL,
+                "personality_context_enabled": True,
+            })
+            # ---------- END TEST MODE ----------
+
+        # keep only the single test conversation
         for order, row in enumerate(rows, start=1):
             conn.execute(
                 """

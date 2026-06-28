@@ -95,6 +95,17 @@ def init_db():
             least_topics_json TEXT NOT NULL DEFAULT '[]'
         );
 
+        -- Anonymous participant login codes. Create these from the researcher dashboard/API
+        -- and email one code to each participant. No public self-registration is needed.
+        CREATE TABLE IF NOT EXISTS participant_access_codes (
+            access_code TEXT PRIMARY KEY,
+            participant_id TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            used_at TEXT,
+            last_login_at TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1
+        );
+
         -- Kept for backward compatibility with older exports/code.
         CREATE TABLE IF NOT EXISTS experiment_sessions (
             participant_id TEXT PRIMARY KEY,
@@ -163,6 +174,92 @@ def get_or_create_participant(participant_id: Optional[str] = None):
         conn.execute("INSERT INTO progress(participant_id) VALUES(?)", (pid,))
         conn.commit()
         return dict(conn.execute("SELECT * FROM participants WHERE participant_id=?", (pid,)).fetchone())
+
+
+def create_participant_record(pid: Optional[str] = None):
+    """Create a participant and empty progress row. Used by access-code generation."""
+    init_db()
+    pid = pid or f"P-{uuid.uuid4().hex[:10].upper()}"
+    with connect() as conn:
+        existing = conn.execute("SELECT * FROM participants WHERE participant_id=?", (pid,)).fetchone()
+        if existing:
+            return dict(existing)
+        conn.execute(
+            "INSERT INTO participants(participant_id,created_at,current_step,updated_at) VALUES(?,?,?,?)",
+            (pid, now(), "consent", now()),
+        )
+        conn.execute("INSERT OR IGNORE INTO progress(participant_id) VALUES(?)", (pid,))
+        conn.commit()
+        return dict(conn.execute("SELECT * FROM participants WHERE participant_id=?", (pid,)).fetchone())
+
+
+def normalize_access_code(code: str) -> str:
+    return "".join(str(code or "").strip().upper().split())
+
+
+def make_access_code() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "P-" + "".join(random.choice(alphabet) for _ in range(4)) + "-" + "".join(random.choice(alphabet) for _ in range(4))
+
+
+def create_access_codes(count: int = 1) -> List[Dict[str, str]]:
+    count = max(1, min(int(count or 1), 200))
+    created = []
+    init_db()
+    with connect() as conn:
+        for _ in range(count):
+            for _attempt in range(50):
+                access_code = make_access_code()
+                if not conn.execute("SELECT 1 FROM participant_access_codes WHERE access_code=?", (access_code,)).fetchone():
+                    break
+            else:
+                raise HTTPException(500, "Could not generate a unique access code")
+
+            pid = f"P-{uuid.uuid4().hex[:10].upper()}"
+            conn.execute(
+                "INSERT INTO participants(participant_id,created_at,current_step,updated_at) VALUES(?,?,?,?)",
+                (pid, now(), "consent", now()),
+            )
+            conn.execute("INSERT INTO progress(participant_id) VALUES(?)", (pid,))
+            conn.execute(
+                "INSERT INTO participant_access_codes(access_code,participant_id,created_at,is_active) VALUES(?,?,?,1)",
+                (access_code, pid, now()),
+            )
+            created.append({"access_code": access_code, "participant_id": pid})
+        conn.commit()
+    return created
+
+
+def login_with_access_code(access_code: str):
+    code = normalize_access_code(access_code)
+    init_db()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM participant_access_codes WHERE access_code=? AND is_active=1",
+            (code,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(401, "Invalid participant code")
+
+        participant = conn.execute(
+            "SELECT * FROM participants WHERE participant_id=?",
+            (row["participant_id"],),
+        ).fetchone()
+        if not participant:
+            conn.execute(
+                "INSERT INTO participants(participant_id,created_at,current_step,updated_at) VALUES(?,?,?,?)",
+                (row["participant_id"], now(), "consent", now()),
+            )
+            conn.execute("INSERT OR IGNORE INTO progress(participant_id) VALUES(?)", (row["participant_id"],))
+
+        if not row["used_at"]:
+            conn.execute("UPDATE participant_access_codes SET used_at=?, last_login_at=? WHERE access_code=?", (now(), now(), code))
+        else:
+            conn.execute("UPDATE participant_access_codes SET last_login_at=? WHERE access_code=?", (now(), code))
+        conn.commit()
+    progress = get_progress(row["participant_id"])
+    progress["access_code"] = code
+    return progress
 
 def set_step(pid, step, completed=0):
     with connect() as conn:
@@ -471,6 +568,8 @@ class Big5In(BaseModel): participant_id: str; answers: Dict[str, int]
 class TopicsIn(BaseModel): participant_id: str; most_topics: List[str]; least_topics: List[str]
 class ChatIn(BaseModel): participant_id: str; text: str
 class LoginIn(BaseModel): password: str
+class ParticipantLoginIn(BaseModel): access_code: str
+class AccessCodeBatchIn(BaseModel): count: int = 1
 
 @app.get("/")
 def root():
@@ -486,8 +585,15 @@ def meta():
 
 @app.post("/api/session")
 def session(data: SessionIn):
+    # Backward-compatible session restore from localStorage.
+    # For real participant recruitment, prefer /api/participant/login with an access code.
     p = get_or_create_participant(data.participant_id)
     return get_progress(p["participant_id"])
+
+
+@app.post("/api/participant/login")
+def participant_login(data: ParticipantLoginIn):
+    return login_with_access_code(data.access_code)
 
 @app.post("/api/consent")
 def consent(data: ConsentIn):
@@ -653,12 +759,18 @@ def researcher_login(data: LoginIn):
     if not hmac.compare_digest(data.password, RESEARCHER_PASSWORD): raise HTTPException(401, "Wrong password")
     return {"token": researcher_token()}
 
+
+@app.post("/api/researcher/access-codes", dependencies=[Depends(require_researcher)])
+def researcher_create_access_codes(data: AccessCodeBatchIn):
+    return {"codes": create_access_codes(data.count)}
+
 @app.get("/api/researcher/overview", dependencies=[Depends(require_researcher)])
 def overview():
     with connect() as conn:
         participants = [dict(r) for r in conn.execute("SELECT * FROM participants ORDER BY created_at DESC").fetchall()]
         sessions = [dict(r) for r in conn.execute("SELECT * FROM conversation_assignments ORDER BY participant_id, conversation_order ASC").fetchall()]
-    return {"participants": participants, "sessions": sessions}
+        access_codes = [dict(r) for r in conn.execute("SELECT access_code,participant_id,created_at,used_at,last_login_at,is_active FROM participant_access_codes ORDER BY created_at DESC").fetchall()]
+    return {"participants": participants, "sessions": sessions, "access_codes": access_codes}
 
 
 @app.get("/api/researcher/participant/{participant_id}", dependencies=[Depends(require_researcher)])
@@ -675,7 +787,7 @@ def export_csv():
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow([
-        "participant_id", "participant_created_at", "current_step", "completed",
+        "participant_id", "access_code", "participant_created_at", "current_step", "completed",
         "session_id", "conversation_order", "assignment_status", "topic_id", "variation_id",
         "topic_preference", "model_size", "model_name", "personality_context_enabled",
         "style_name", "speaker", "text", "timestamp"
@@ -683,18 +795,19 @@ def export_csv():
     with connect() as conn:
         rows = conn.execute("""
             SELECT
-                p.participant_id, p.created_at AS participant_created_at, p.current_step, p.completed,
+                p.participant_id, ac.access_code, p.created_at AS participant_created_at, p.current_step, p.completed,
                 a.session_id, a.conversation_order, a.status AS assignment_status, a.topic_id, a.variation_id,
                 a.topic_preference, a.model_size, a.model_name, a.personality_context_enabled, a.style_name,
                 c.speaker, c.text, c.created_at AS turn_time, c.turn_index
             FROM participants p
+            LEFT JOIN participant_access_codes ac ON p.participant_id=ac.participant_id
             LEFT JOIN conversation_assignments a ON p.participant_id=a.participant_id
             LEFT JOIN conversation_turns c ON a.session_id=c.session_id
             ORDER BY p.created_at DESC, a.conversation_order ASC, c.turn_index ASC
         """).fetchall()
     for r in rows:
         writer.writerow([
-            r["participant_id"], r["participant_created_at"], r["current_step"], r["completed"],
+            r["participant_id"], r["access_code"] or "", r["participant_created_at"], r["current_step"], r["completed"],
             r["session_id"] or "", r["conversation_order"] or "", r["assignment_status"] or "", r["topic_id"] or "", r["variation_id"] or "",
             r["topic_preference"] or "", r["model_size"] or "", r["model_name"] or "", r["personality_context_enabled"] if r["personality_context_enabled"] is not None else "",
             r["style_name"] or "", r["speaker"] or "", r["text"] or "", r["turn_time"] or "",

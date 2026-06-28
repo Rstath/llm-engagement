@@ -1144,3 +1144,45 @@ body[data-step="chat"] .card {
     display: none !important;
   }
 }
+
+
+/* Participant login / logout */
+.login-card {
+  max-width: 520px;
+  margin: 0 auto;
+}
+.login-card input[type="text"],
+.login-card input[type="number"],
+.section input[type="number"] {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  background: #fff;
+  color: var(--text);
+  margin-top: 8px;
+}
+.participant-logout-button {
+  position: fixed;
+  right: 18px;
+  top: 18px;
+  z-index: 1500;
+  padding: 9px 14px;
+  font-size: 13px;
+  background: var(--soft);
+  color: var(--text);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 22px rgba(27,69,79,.12);
+}
+.code-list {
+  white-space: pre-wrap;
+  background: rgba(27,69,79,.06);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  overflow-x: auto;
+  color: var(--text);
+}
+body[data-step="chat"] .participant-logout-button {
+  display: none;
+}

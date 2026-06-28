@@ -36,11 +36,38 @@ function renderProgressFromServer(progress) {
   }
 }
 function saveParticipant(id) { localStorage.setItem('participant_id', id); }
+function saveAccessCode(code) { if (code) localStorage.setItem('participant_access_code', code); }
+function clearParticipantSession() {
+  localStorage.removeItem('participant_id');
+  localStorage.removeItem('participant_access_code');
+  state.participant = null;
+  state.progress = null;
+  state.hadExistingParticipant = false;
+  document.querySelectorAll('.resume-modal-backdrop').forEach(el => el.remove());
+  renderParticipantLogin();
+}
 function setProgress(progress) {
   state.progress = progress;
   state.participant = progress.participant_id;
   saveParticipant(progress.participant_id);
   if (participantLabel) participantLabel.textContent = `Participant: ${progress.participant_id}`;
+  renderParticipantLogoutButton();
+}
+function renderParticipantLogoutButton() {
+  let btn = document.getElementById('participantLogoutButton');
+  if (!state.participant || location.hash.replace('#', '') === 'researcher') {
+    if (btn) btn.remove();
+    return;
+  }
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'participantLogoutButton';
+    btn.className = 'participant-logout-button';
+    btn.type = 'button';
+    btn.textContent = 'Log out';
+    document.body.appendChild(btn);
+  }
+  btn.onclick = clearParticipantSession;
 }
 function errorBox(err) { return `<p class="error">${htmlEscape(err.message || err)}</p>`; }
 function actions(...buttons) { return `<div class="actions">${buttons.join('')}</div>`; }
@@ -144,7 +171,7 @@ function scrollPageToTop() {
 }
 
 function scrollToTopAfterRender() {
-  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
     setTimeout(scrollPageToTop, 0);
   });
 }
@@ -172,7 +199,7 @@ function splitAgentText(text, limit = AGENT_TEXT_LIMIT) {
       slice.lastIndexOf('? '),
       slice.lastIndexOf('! '),
       slice.lastIndexOf(', '),
-            slice.lastIndexOf(' ')
+      slice.lastIndexOf(' ')
     );
 
     if (cut < 35) cut = limit;
@@ -301,30 +328,135 @@ function keepNativeInputVisible() {
   setViewportHeight();
 }
 
+async function loginWithAccessCode(code) {
+  const clean = String(code || '').trim().toUpperCase();
+  if (!clean) throw new Error('Please enter your participant code.');
+
+  const progress = await api('/api/participant/login', {
+    method: 'POST',
+    body: JSON.stringify({ access_code: clean })
+  });
+
+  saveAccessCode(clean);
+  state.hadExistingParticipant = hasSavedProgress(progress);
+  setProgress(progress);
+  route();
+  setTimeout(showResumeModalOnce, 150);
+}
+
+function renderParticipantLogin(err = '') {
+  if (participantLabel) participantLabel.textContent = 'Participant login';
+  document.body.dataset.step = 'login';
+  renderParticipantLogoutButton();
+
+  const savedCode = localStorage.getItem('participant_access_code') || '';
+
+  app.innerHTML = `<div class="login-page">
+    <h2>Participant login</h2>
+    <p class="muted">Enter the anonymous participant code you received by email.</p>
+    <div class="section">
+      <label><strong>Participant code</strong>
+        <input id="participantCode" class="access-code-input" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" value="${htmlEscape(savedCode)}" placeholder="e.g. P001-A7K2">
+      </label>
+      <p class="muted">Use the same code if you return later or use a different device.</p>
+    </div>
+    ${err ? errorBox(err) : ''}
+  </div>` + actions('<button id="loginParticipant">Continue</button>');
+
+  const input = document.getElementById('participantCode');
+  const btn = document.getElementById('loginParticipant');
+
+  input.addEventListener('input', () => {
+    input.value = input.value.toUpperCase();
+  });
+
+  input.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      btn.click();
+    }
+  });
+
+  btn.onclick = async () => {
+    try {
+      await loginWithAccessCode(input.value);
+    } catch (e) {
+      renderParticipantLogin(e);
+    }
+  };
+
+  setTimeout(() => input.focus(), 50);
+}
+
 async function init() {
   state.device = detectDevice();
   document.body.dataset.device = state.device;
   state.meta = await api('/api/meta');
-  const participant_id = localStorage.getItem('participant_id');
-  state.hadExistingParticipant = Boolean(participant_id);
-  setProgress(await api('/api/session', { method: 'POST', body: JSON.stringify({ participant_id }) }));
+
   renderHelpButton();
-  route();
-  setTimeout(showResumeModalOnce, 150);
+
+  const hash = location.hash.replace('#', '');
+  if (hash === 'researcher') {
+    route();
+    return;
+  }
+
+  const savedCode = localStorage.getItem('participant_access_code');
+  const participant_id = localStorage.getItem('participant_id');
+
+  if (savedCode) {
+    try {
+      await loginWithAccessCode(savedCode);
+      return;
+    } catch {
+      localStorage.removeItem('participant_access_code');
+      localStorage.removeItem('participant_id');
+    }
+  }
+
+  if (participant_id) {
+    try {
+      state.hadExistingParticipant = true;
+      setProgress(await api('/api/session', {
+        method: 'POST',
+        body: JSON.stringify({ participant_id })
+      }));
+      route();
+      setTimeout(showResumeModalOnce, 150);
+      return;
+    } catch {
+      localStorage.removeItem('participant_id');
+    }
+  }
+
+  renderParticipantLogin();
 }
+
 function route() {
   const hash = location.hash.replace('#', '');
-  const nextStep = hash === 'researcher' ? 'researcher' : (state.progress.current_step || 'consent');
+
+  if (hash === 'researcher') {
+    const pageChanged = state.lastRenderedStep !== 'researcher';
+    state.lastRenderedStep = 'researcher';
+    if (pageChanged) scrollToTopAfterRender();
+    return renderResearcherLogin();
+  }
+
+  if (!state.progress || !state.participant) {
+    return renderParticipantLogin();
+  }
+
+  const nextStep = state.progress.current_step || 'consent';
   const pageChanged = state.lastRenderedStep !== nextStep;
   state.lastRenderedStep = nextStep;
 
   const finishRoute = (renderFn) => {
     const result = renderFn();
+    renderParticipantLogoutButton();
     if (pageChanged) scrollToTopAfterRender();
     return result;
   };
 
-  if (hash === 'researcher') return finishRoute(renderResearcherLogin);
   const step = state.progress.current_step || 'consent';
   document.body.dataset.step = step;
   if (step === 'consent') return finishRoute(renderConsent);
@@ -341,22 +473,22 @@ function renderConsent() {
     <h3>Study basics</h3>
     <p><strong>Study title:</strong> Personality and demographic questionnaire for text-based interaction research<br>
     <strong>Research context:</strong> Academic HCI thesis research<br>
-    <strong>Estimated duration:</strong> approximately 10–15 minutes<br>
+    <strong>Estimated duration:</strong> approximately 10–15 minutes per short conversation stage<br>
     <strong>Participants:</strong> adults aged 18 or older</p>
     <h3>Purpose and goal of the study</h3>
     <p>The purpose of this study is to collect demographic information, mobile text-communication habits, conversational-AI experience, Big Five personality scores, and multiple short text-based conversations with open-source AI models. The goal is to analyze text-based interaction and engagement in a thesis project.</p>
     <h3>What you will do</h3>
     <ol><li>complete this informed consent form,</li><li>complete a demographic and pre-experiment questionnaire,</li><li>complete the Big Five Inventory questionnaire,</li><li>select topic preferences,</li><li>complete multiple short mobile-style chats with open-source AI models at your own pace.</li></ol>
-        <h3>Data and privacy</h3>
-    <p>The study stores your questionnaire answers, computed Big Five scores, selected topic preferences, and chat messages in a research database. These results are visible only to the protected researcher dashboard and are not shown to participants. The data may be analyzed in aggregated or anonymized form for thesis purposes. Please do not enter identifying information unless explicitly requested.</p>
+    <h3>Data and privacy</h3>
+    <p>The study stores your questionnaire answers, computed Big Five scores, selected topic preferences, anonymous participant code, and chat messages in a research database. These results are visible only to the protected researcher dashboard and are not shown to participants. The data may be analyzed in aggregated or anonymized form for thesis purposes. Please do not enter identifying information unless explicitly requested.</p>
     <h3>Voluntary participation and withdrawal</h3>
-    <p>Participation is voluntary. You may stop at any time. After each completed form or conversation, your progress is saved so that you can leave and resume later from the next step.</p>
+    <p>Participation is voluntary. You may stop at any time. After each completed form or conversation, your progress is saved so that you can leave and resume later from the next step by using the same participant code.</p>
     <h3>Research contact</h3>
     <p>For questions about the study, contact the researcher responsible for this thesis project.</p>
     <div class="section consent-checks">
       <label><input id="c1" type="checkbox"> I confirm that I am at least 18 years old.</label>
       <label><input id="c2" type="checkbox"> I understand that participation is voluntary and that I may stop at any time.</label>
-      <label><input id="c3" type="checkbox"> I agree that my questionnaire answers, Big Five scores, topic preferences, and chat messages may be saved for research analysis.</label>
+      <label><input id="c3" type="checkbox"> I agree that my questionnaire answers, Big Five scores, topic preferences, anonymous participant code, and chat messages may be saved for research analysis.</label>
     </div>` + actions('<button id="continue" disabled>Save and continue</button>');
   const btn = document.getElementById('continue');
   const update = () => { btn.disabled = !(c1.checked && c2.checked && c3.checked); };
@@ -367,7 +499,7 @@ function renderConsent() {
       age_confirmed: c1.checked,
       voluntary_participation: c2.checked,
       data_storage_agreed: c3.checked,
-      consent_version: 'HCI structured consent: study basics, procedure, data privacy, voluntary participation'
+      consent_version: 'HCI structured consent with participant-code resume'
     };
     try { setProgress(await api('/api/consent', { method: 'POST', body: JSON.stringify(payload) })); route(); }
     catch (e) { app.insertAdjacentHTML('beforeend', errorBox(e)); }
@@ -464,7 +596,8 @@ function renderPre(errors = {}) {
   document.querySelectorAll('input[type="radio"]').forEach(el => el.addEventListener('change', () => { if (el.name === 'used_ai_before') renderAiFollowups(); updateButton(); }));
   renderAiFollowups();
   updateButton();
-    btn.onclick = async () => {
+
+  btn.onclick = async () => {
     const answers = collectPre();
     const validation = validatePre(answers);
     if (Object.keys(validation).length) return renderPre(validation);
@@ -567,13 +700,14 @@ async function renderChat(err = '') {
 
   const assignment = data.assignment || {};
   const positionText = assignment.conversation_order && assignment.total_conversations
-  ? `Conversation ${assignment.conversation_order} of ${assignment.total_conversations}`
-  : 'Conversation';
+    ? `Conversation ${assignment.conversation_order} of ${assignment.total_conversations}`
+    : 'Conversation';
 
   const inputHtml = done
     ? `<p class="muted chat-complete">${htmlEscape(positionText)} complete.</p>`
     : `<form class="chat-form" id="chatForm"><div class="message-composer"><textarea id="chatText" rows="1" inputmode="text" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" placeholder="Message"></textarea><button aria-label="Send message" type="submit" class="send-btn" disabled><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="M5.5 11.5L12 5l6.5 6.5"></path></svg></button></div></form>`;
-    app.innerHTML = `<div class="${pageClass}">
+
+  app.innerHTML = `<div class="${pageClass}">
     <div class="${shellClass}">
       <div class="${screenClass}">
         ${statusBar}
@@ -609,8 +743,7 @@ async function renderChat(err = '') {
     updateComposerState(textEl, sendBtn);
 
     const messages = document.getElementById('messages');
-
-    messages.insertAdjacentHTML(
+        messages.insertAdjacentHTML(
       'beforeend',
       chatMessageHtml({
         speaker: 'Human',
@@ -777,10 +910,14 @@ async function renderChat(err = '') {
 
 function renderDone() {
   if (participantLabel) participantLabel.textContent = state.participant ? `Participant: ${state.participant}` : '';
+  renderParticipantLogoutButton();
   app.innerHTML = `<div class="thank-you"><div class="thank-you-check">✓</div><h2>Thank you!</h2><p>Your responses have been submitted successfully.</p></div>`;
 }
 function renderResearcherLogin(err = '') {
   if (participantLabel) participantLabel.textContent = 'Researcher area';
+  const logout = document.getElementById('participantLogoutButton');
+  if (logout) logout.remove();
+
   app.innerHTML = `<h2>Researcher login</h2><p class="muted">This page is protected by the backend. Changing the URL is not enough to access participant data.</p><label>Password<input type="password" id="password"></label>${err ? errorBox(err) : ''}` + actions('<button id="login">Log in</button>');
   document.getElementById('login').onclick = async () => {
     try { const res = await api('/api/researcher/login', { method:'POST', body: JSON.stringify({ password: document.getElementById('password').value }) }); localStorage.setItem('researcher_token', res.token); renderResearcherDashboard(); } catch(e) { renderResearcherLogin(e); }
@@ -790,8 +927,36 @@ async function researcherApi(path) { return api(path, { headers: { Authorization
 async function renderResearcherDashboard(err = '') {
   let data;
   try { data = await researcherApi('/api/researcher/overview'); } catch(e) { return renderResearcherLogin(e); }
-  app.innerHTML = `<h2>Researcher dashboard</h2>${err ? errorBox(err) : ''}<p><a href="${API}/api/researcher/export.csv" id="exportLink">Download CSV export</a></p>
-    <div class="table-wrap"><table><thead><tr><th>Participant</th><th>Created</th><th>Step</th><th>Completed</th></tr></thead><tbody>${data.participants.map(p => `<tr><td>${htmlEscape(p.participant_id)}</td><td>${htmlEscape(p.created_at)}</td><td>${htmlEscape(p.current_step)}</td><td>${p.completed ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table></div>`;
+
+  app.innerHTML = `<h2>Researcher dashboard</h2>${err ? errorBox(err) : ''}
+    <div class="actions">
+      <button id="createCodes">Create participant codes</button>
+      <a href="${API}/api/researcher/export.csv" id="exportLink">Download CSV export</a>
+    </div>
+    <div id="createdCodes"></div>
+    <div class="table-wrap"><table><thead><tr><th>Participant</th><th>Access code</th><th>Created</th><th>Step</th><th>Completed</th></tr></thead><tbody>${data.participants.map(p => `<tr><td>${htmlEscape(p.participant_id)}</td><td>${htmlEscape(p.access_code || '')}</td><td>${htmlEscape(p.created_at)}</td><td>${htmlEscape(p.current_step)}</td><td>${p.completed ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table></div>`;
+
+  document.getElementById('createCodes').onclick = async () => {
+    const raw = prompt('How many participant codes should I create?', '10');
+    const count = Number(raw);
+    if (!Number.isFinite(count) || count < 1 || count > 200) {
+      alert('Enter a number from 1 to 200.');
+      return;
+    }
+
+    try {
+      const res = await researcherApi('/api/researcher/create-codes', {
+        method: 'POST',
+        body: JSON.stringify({ count })
+      });
+
+      const box = document.getElementById('createdCodes');
+      box.innerHTML = `<div class="section"><h3>New participant codes</h3><p class="muted">Copy these now and email one code to each participant.</p><textarea readonly rows="8">${htmlEscape((res.codes || []).join('\n'))}</textarea></div>`;
+    } catch (e) {
+      renderResearcherDashboard(e);
+    }
+  };
+
   document.getElementById('exportLink').onclick = async (ev) => {
     ev.preventDefault();
     const res = await fetch(`${API}/api/researcher/export.csv`, { headers: { Authorization: `Bearer ${localStorage.getItem('researcher_token') || ''}` } });

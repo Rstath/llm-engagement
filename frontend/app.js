@@ -934,12 +934,61 @@ function renderResearcherLogin(err = '') {
   const logout = document.getElementById('participantLogoutButton');
   if (logout) logout.remove();
 
-  app.innerHTML = `<h2>Researcher login</h2><label>Password<input type="password" id="password"></label>${err ? errorBox(err) : ''}` + actions('<button id="login">Log in</button>');
-  document.getElementById('login').onclick = async () => {
-    try { const res = await api('/api/researcher/login', { method:'POST', body: JSON.stringify({ password: document.getElementById('password').value }) }); localStorage.setItem('researcher_token', res.token); renderResearcherDashboard(); } catch(e) { renderResearcherLogin(e); }
-  };
+  app.innerHTML = `
+    <h2>Researcher login</h2>
+
+    <label>
+      Password
+      <input
+        type="password"
+        id="password"
+        autocomplete="current-password"
+      >
+    </label>
+
+    ${err ? errorBox(err) : ''}
+  ` + actions('<button id="login">Log in</button>');
+
+  const input = document.getElementById('password');
+  const button = document.getElementById('login');
+
+  async function login() {
+    try {
+      const res = await api('/api/researcher/login', {
+        method: 'POST',
+        body: JSON.stringify({
+          password: input.value
+        })
+      });
+
+      localStorage.setItem('researcher_token', res.token);
+      renderResearcherDashboard();
+
+    } catch (e) {
+      renderResearcherLogin(e);
+    }
+  }
+
+  button.onclick = login;
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      login();
+    }
+  });
+
+  setTimeout(() => input.focus(), 50);
 }
-async function researcherApi(path) { return api(path, { headers: { Authorization: `Bearer ${localStorage.getItem('researcher_token') || ''}` } }); }
+async function researcherApi(path, options = {}) {
+  return api(path, {
+      ...options,
+      headers: {
+          ...(options.headers || {}),
+          Authorization: `Bearer ${localStorage.getItem('researcher_token') || ''}`
+      }
+  });
+}
 async function renderResearcherDashboard(err = '') {
   let data;
   try { data = await researcherApi('/api/researcher/overview'); } catch(e) { return renderResearcherLogin(e); }
@@ -961,15 +1010,10 @@ async function renderResearcherDashboard(err = '') {
     }
 
     try {
-      async function researcherApi(path, options = {}) {
-        return api(path, {
-          ...options,
-          headers: {
-            ...(options.headers || {}),
-            Authorization: `Bearer ${localStorage.getItem('researcher_token') || ''}`
-          }
-        });
-      }
+      const res = await researcherApi('/api/researcher/access-codes', {
+        method: 'POST',
+        body: JSON.stringify({ count })
+      });
 
       const box = document.getElementById('createdCodes');
       box.innerHTML = `<div class="section"><h3>New participant codes</h3><p class="muted">Copy these now and email one code to each participant.</p><textarea readonly rows="8">${htmlEscape((res.codes || []).map(c => c.access_code).join('\n'))}</textarea></div>`;
@@ -980,7 +1024,7 @@ async function renderResearcherDashboard(err = '') {
 
   document.getElementById('exportLink').onclick = async (ev) => {
     ev.preventDefault();
-    const res = await fetch(`${API}/api/researcher/export.csv`, { headers: { Authorization: `Bearer ${localStorage.getItem('researcher_token') || ''}` } });
+    const res = await researcherApi('/api/researcher/export.csv');
     const blob = await res.blob(); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'llm_engagement_export.csv'; a.click(); URL.revokeObjectURL(url);
   };
 }

@@ -19,7 +19,7 @@ h2, h3 { margin-top: 0; }
 label { display: block; margin: 12px 0; line-height: 1.35; }
 input, select, textarea, button { font: inherit; }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--text); }
-select, textarea, input[type="password"] { width: 100%; border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: #fff; color: var(--text); }
+select, textarea, input[type="password"], input[type="text"] { width: 100%; border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: #fff; color: var(--text); }
 button { border: 0; border-radius: 999px; padding: 12px 20px; background: var(--text); color: var(--bg); cursor: pointer; font-weight: 700; }
 button.secondary { background: var(--soft); color: var(--text); }
 button:disabled { opacity: .45; cursor: not-allowed; }

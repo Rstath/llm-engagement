@@ -24,8 +24,11 @@ function htmlEscape(s) {
 }
 async function api(path, options = {}) {
   const res = await fetch(API + path, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {})
+    }
   });
 
   if (!res.ok) {
@@ -40,7 +43,11 @@ async function api(path, options = {}) {
       message = 'Wrong password. Please try again';
     }
 
-    throw new Error(message);
+    throw new Error(
+      typeof message === 'string'
+        ? message
+        : JSON.stringify(message)
+    );
   }
 
   return res.json();

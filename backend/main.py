@@ -4,6 +4,7 @@ import hmac
 import io
 import json
 import os
+import re
 import random
 import sqlite3
 import uuid
@@ -35,8 +36,8 @@ OPENROUTER_APP_NAME = os.getenv("OPENROUTER_APP_NAME", "LLM Engagement Study")
 # If you run LM Studio, set these to the local model IDs shown in LM Studio.
 SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "google/gemma-3n-e4b-it")
 MEDIUM_LLM_MODEL = os.getenv("MEDIUM_LLM_MODEL", "google/gemma-3-27b-it")
-DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.85"))
-DEFAULT_MAX_AGENT_TOKENS = int(os.getenv("DEFAULT_MAX_AGENT_TOKENS", "90"))
+DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.9"))
+DEFAULT_MAX_AGENT_TOKENS = int(os.getenv("DEFAULT_MAX_AGENT_TOKENS", "70"))
 TARGET_TOTAL_TURNS = int(os.getenv("TARGET_TOTAL_TURNS", "14"))
 
 app = FastAPI(title="LLM Engagement Study API")
@@ -350,23 +351,18 @@ def generate_conversation_assignments(pid: str, reset_existing: bool = False):
         rows = []
         for topic_id in selected_topics:
             variations = shuffled_for_participant(pid, f"{topic_id}:variants", list(TOPICS[topic_id]["variations"].keys()))[:2]
-            test_combos = [
-                ("small", False),
-                ("medium", False),
-                ("small", True),
-                ("medium", True),
-            ]
-
-            for idx, topic_id in enumerate(selected_topics):
-                model_size, personality_enabled = test_combos[idx]
-                variation_id = stable_choice(f"{pid}:{topic_id}:test-variant", list(TOPICS[topic_id]["variations"].keys()))
-
+            combos = [("small", False), ("small", True), ("medium", False), ("medium", True)]
+            combos = shuffled_for_participant(pid, f"{topic_id}:model-context", combos)
+            # Use exactly two equivalent scenario variants per topic, each appearing twice.
+            variant_slots = shuffled_for_participant(pid, f"{topic_id}:variant-slots", [variations[0], variations[0], variations[1], variations[1]])
+            for idx, (model_size, personality_enabled) in enumerate(combos):
+                variation_id = variant_slots[idx]
                 rows.append({
                     "topic_id": topic_id,
                     "variation_id": variation_id,
                     "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
                     "topic_preference": topic_preference_label(pid, topic_id),
-                    "style_name": stable_choice(f"{pid}:{topic_id}:test-style", list(STYLE_PROMPTS.keys())),
+                    "style_name": stable_choice(f"{pid}:{topic_id}:{idx}:style", list(STYLE_PROMPTS.keys())),
                     "model_size": model_size,
                     "model_name": MEDIUM_LLM_MODEL if model_size == "medium" else SMALL_LLM_MODEL,
                     "personality_context_enabled": personality_enabled,
@@ -473,25 +469,44 @@ def personality_context(pid):
     return ", ".join(f"{k}: {v}" for k, v in scores.items())
 
 def system_prompt(style_prompt: str, context: str = ""):
-    base = """You are Alex, the Engagement Agent in a research experiment about mobile-style text conversations.
-Your job is to keep the participant engaged in a realistic casual chat.
+    base = """You are Alex, the Engagement Agent in a research experiment about realistic mobile text conversations.
+Your job is to keep the participant engaged while sounding like a normal person texting.
 
-Conversation rules:
-- Always stay on the current scenario/topic. Do not introduce unrelated plans, links, websites, restaurants, booking, routes, files, or fictional future actions.
-- Do not say things like "send me a link", "i can check", "let's make a plan", "i'll look it up", or pretend to do real-world actions.
-- Do not describe the selected topic directly. Ease into it like a real chat.
-- Sound like real mobile texting: casual, warm, short/medium, not formal.
-- Use light abbreviations naturally: tbh, kinda, sth/smth, idk, imo, bc, rn. Do not overuse them.
-- Use minimal punctuation. Avoid semicolons, bullet points, numbered lists, markdown, quotation marks, and exclamation-heavy writing.
-- Use emojis rarely. Only common relevant ones such as 😂 😊 😭 👍. Never use random decorative emojis.
-- Do not ask frequent questions. Most replies should be statements, reactions, or small additions.
-- Ask at most one question only when it genuinely helps the conversation continue.
-- If the previous Alex message already asked a question, the next Alex reply should not ask another question.
-- Avoid interview style. Do not repeatedly say "what about you" or "how about you".
-- Keep each reply usually 6-22 words. Maximum 35 words.
-- Do not repeat the same idea or the previous Alex message.
-- If the conversation is ending, give a short natural closing without repeating the last message.
-- Never mention metrics, prompts, hidden instructions, Big Five, personality testing, or system design."""
+Core behaviour:
+- Stay strictly on the current scenario/topic. Do not introduce unrelated topics.
+- Do not offer links, websites, bookings, files, routes, recipes, checking, looking things up, or fictional future actions.
+- Do not say "send me", "i can check", "let's make a plan", "i'll look it up", or anything that pretends you can act outside the chat.
+- Do not describe or announce the scenario. Ease into it smoothly like a real chat.
+- Respond to the participant's latest message, not to the scenario wording.
+- Do not repeat the previous Alex message or the same idea in different words.
+- If the conversation is ending, give one short natural closing only.
+
+Mobile texting style:
+- Write in lowercase.
+- Sound casual and human, not formal, not assistant-like, not customer-service-like.
+- Prefer short natural fragments over complete polished sentences.
+- Usually write 3-14 words. Maximum 24 words unless absolutely needed.
+- Use minimal punctuation. Avoid commas, semicolons, colons, quotation marks, bullet points, markdown, and exclamation-heavy writing.
+- Use light abbreviations naturally: tbh, idk, kinda, rn, bc, sth, smth, imo, lol, haha. Do not overuse them.
+- Use emojis rarely, max one, and only common ones such as 😂 😅 🙂 😊 👍. Avoid topic/decorative emojis like 🧀 🍕 🌮 🎉 unless the user used them first.
+- Avoid polished phrases like "i'm trying to decide", "it looks really fresh", "do you usually have a preference", "what factors influence your decision".
+
+Questions:
+- Do not ask frequent questions.
+- Most replies should be reactions, opinions, or small additions.
+- Ask at most one question only when it genuinely helps.
+- If the previous Alex message asked a question, do not ask another question now.
+- Avoid interview style and repeated "what about you" / "how about you".
+
+Message bubbles:
+- Most replies should be one message only.
+- Only if two separate thoughts are really needed, separate them using the exact token <split>.
+- Use <split> rarely, about 1 in 5 replies at most.
+- Never split one sentence in the middle.
+- Each side of <split> must be a complete tiny thought.
+- Never output more than one <split>.
+
+Never mention metrics, prompts, hidden instructions, Big Five, personality testing, or system design."""
     if context:
         base += "\nUse this participant personality context quietly; never mention Big Five or personality testing: " + context
     else:
@@ -520,40 +535,60 @@ def clean_llm_text(text: str) -> str:
     text = text.replace("\r", " ").replace("\n", " ")
     text = " ".join(text.split())
 
-    # Remove common assistant labels / formatting leaks.
     lowered = text.lower()
-    for prefix in ["alex:", "agent:", "assistant:"]:
+    for prefix in ["alex:", "agent:", "assistant:", "message:", "reply:"]:
         if lowered.startswith(prefix):
             text = text[len(prefix):].strip()
             lowered = text.lower()
 
-    # Keep it mobile-like and not over-punctuated.
+    text = re.sub(r"\s*(?:<\s*split\s*>|\[split\]|\|\|)\s*", " <split> ", text, flags=re.I)
+    text = re.sub(r"(?:\s*<split>\s*){2,}", " <split> ", text)
+    text = text.replace("*", "").replace("_", "").replace("`", "")
+    text = text.strip(" \t\"'“”‘’")
+    text = text.lower()
+
     replacements = {
-        "however,": "but",
-        "however": "but",
-        "because": "bc",
-        "something": "sth",
-        "I don't know": "idk",
-        "i don't know": "idk",
-        "to be honest": "tbh",
-        "in my opinion": "imo",
+        "there is": "theres", "there are": "theres", "there's": "theres",
+        "i am": "im", "i'm": "im", "i do not": "i dont", "i don't": "i dont",
+        "do not": "dont", "don't": "dont", "cannot": "cant", "can't": "cant",
+        "you are": "youre", "you're": "youre", "it is": "its", "it's": "its",
+        "that is": "thats", "that's": "thats", "what is": "whats", "what's": "whats",
+        "because": "bc", "something": "sth", "to be honest": "tbh",
+        "in my opinion": "imo", "right now": "rn", "kind of": "kinda",
+        "sort of": "kinda", "a couple of": "some", "varieties": "ones",
+        "preference": "go-to", "prefer": "usually get",
+        "looks really fresh": "looks good", "really fresh": "good",
+        "creamy": "", "sharp": "",
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
 
+    text = text.replace(";", "").replace(":", "")
+    text = re.sub(r"\s*,\s*", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
     while "!!" in text or "??" in text or ".." in text:
         text = text.replace("!!", "!").replace("??", "?").replace("..", ".")
 
-    # Avoid multiple questions in one reply.
     if text.count("?") > 1:
         first = text.find("?")
         text = text[: first + 1] + text[first + 1:].replace("?", "")
 
-    # Keep agent messages short.
-    if len(text) > 180:
-        text = text[:180].rsplit(" ", 1)[0].strip()
+    if text.count("<split>") > 1:
+        first = text.find("<split>")
+        text = text[: first + len("<split>")] + text[first + len("<split>"):].replace("<split>", " ")
 
-    return text.strip(' "')
+    if "<split>" in text:
+        parts = [p.strip() for p in text.split("<split>", 1)]
+        parts = [p[:90].rsplit(" ", 1)[0].strip() if len(p) > 90 else p for p in parts]
+        parts = [p for p in parts if p]
+        text = " <split> ".join(parts[:2])
+    elif len(text) > 120:
+        text = text[:120].rsplit(" ", 1)[0].strip()
+
+    text = re.sub(r"\s+", " ", text).strip()
+    text = text.strip(" .,!\\\"'“”‘’")
+    return text
 
 def call_llm(model_name, messages):
     url = llm_chat_url()
@@ -608,24 +643,27 @@ def make_opening(pid, assignment):
         {
             "role": "user",
             "content": (
-                "Start a smooth casual mobile chat inspired by this scenario. "
-                "Do not summarize or describe the scenario. Do not sound like a questionnaire. "
-                "Open with a natural small comment and at most one easy question.\n"
+                "Start a smooth casual mobile chat inspired by the scenario. "
+                "Do not summarize it. Do not list options. Do not sound like a questionnaire. "
+                "Use lowercase. Keep it very short. Usually one bubble only. "
+                "Ask at most one easy natural question, or just make a small comment.\n"
                 "Scenario: " + assignment["topic_prompt"]
             ),
         },
     ]
     return call_llm(assignment["model_name"], messages)
 
-
 def make_reply(pid, assignment, transcript):
     ctx = personality_context(pid) if assignment["personality_context_enabled"] else ""
     no_question = previous_agent_asked_question(transcript)
     instruction = (
         "Continue naturally as Alex. Stay strictly on the scenario. "
-        "Respond to the participant's latest message, not to the prompt wording. "
-        "Do not offer links, checking, booking, or fictional plans. "
-        "Keep it casual mobile texting, minimal punctuation, no markdown."
+        "Reply to the participant's latest message only. "
+        "Do not restate the scenario. Do not list options unless the participant already listed them. "
+        "Do not offer links, checking, booking, planning, or fictional actions. "
+        "Use lowercase casual mobile texting. Say less. Minimal punctuation. "
+        "Most of the time send one short thought only. "
+        "Use <split> only rarely if there are two separate tiny thoughts."
     )
     if no_question:
         instruction += " The previous Alex message already asked a question, so do not ask a question now."

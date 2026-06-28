@@ -27,6 +27,14 @@ async function api(path, options = {}) {
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+function renderProgressFromServer(progress) {
+  setProgress(progress);
+  if (progress.current_step === 'done' || progress.completed) {
+    renderDone();
+  } else {
+    route();
+  }
+}
 function saveParticipant(id) { localStorage.setItem('participant_id', id); }
 function setProgress(progress) {
   state.progress = progress;
@@ -88,8 +96,6 @@ function showResumeModalOnce() {
 }
 function parseTimestamp(value) {
   if (!value) return new Date();
-  // Backend timestamps are ISO strings without a timezone on Render. Treat them as UTC
-  // so the UI shows the participant's actual local time.
   const raw = String(value);
   const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw);
   const d = new Date(hasTimezone ? raw : `${raw}Z`);
@@ -166,7 +172,7 @@ function splitAgentText(text, limit = AGENT_TEXT_LIMIT) {
       slice.lastIndexOf('? '),
       slice.lastIndexOf('! '),
       slice.lastIndexOf(', '),
-      slice.lastIndexOf(' ')
+            slice.lastIndexOf(' ')
     );
 
     if (cut < 35) cut = limit;
@@ -188,21 +194,15 @@ function splitAgentText(text, limit = AGENT_TEXT_LIMIT) {
 
 function readingDelay(userText) {
   const chars = String(userText || '').length;
-
-  // Realistic mobile reading: about 900–1400 chars/min + reaction pause
   const readingMs = chars * randomBetween(42, 72);
   const reactionMs = randomBetween(450, 1300);
-
   return Math.min(4200, Math.max(800, readingMs + reactionMs));
 }
 
 function writingDelay(agentText) {
   const chars = String(agentText || '').length;
-
-  // Realistic phone typing: about 180–300 chars/min
   const typingMs = chars * randomBetween(190, 330);
   const thinkingMs = randomBetween(300, 1200);
-
   return Math.min(5200, Math.max(900, typingMs + thinkingMs));
 }
 
@@ -262,7 +262,6 @@ function renderHelpButton() {
   }
   btn.onclick = openInfoModal;
 }
-
 
 function isAndroidDevice() {
   return /Android/i.test(navigator.userAgent || '');
@@ -345,19 +344,19 @@ function renderConsent() {
     <strong>Estimated duration:</strong> approximately 10–15 minutes<br>
     <strong>Participants:</strong> adults aged 18 or older</p>
     <h3>Purpose and goal of the study</h3>
-    <p>The purpose of this study is to collect demographic information, mobile text-communication habits, conversational-AI experience, Big Five personality scores, and a short text-based conversation with an open-source AI model. The goal is to analyze text-based interaction and engagement in a thesis project.</p>
+    <p>The purpose of this study is to collect demographic information, mobile text-communication habits, conversational-AI experience, Big Five personality scores, and multiple short text-based conversations with open-source AI models. The goal is to analyze text-based interaction and engagement in a thesis project.</p>
     <h3>What you will do</h3>
-    <ol><li>complete this informed consent form,</li><li>complete a demographic and pre-experiment questionnaire,</li><li>complete the Big Five Inventory questionnaire,</li><li>select topic preferences,</li><li>complete a short mobile-style chat with an open-source AI model.</li></ol>
-    <h3>Data and privacy</h3>
+    <ol><li>complete this informed consent form,</li><li>complete a demographic and pre-experiment questionnaire,</li><li>complete the Big Five Inventory questionnaire,</li><li>select topic preferences,</li><li>complete multiple short mobile-style chats with open-source AI models at your own pace.</li></ol>
+        <h3>Data and privacy</h3>
     <p>The study stores your questionnaire answers, computed Big Five scores, selected topic preferences, and chat messages in a research database. These results are visible only to the protected researcher dashboard and are not shown to participants. The data may be analyzed in aggregated or anonymized form for thesis purposes. Please do not enter identifying information unless explicitly requested.</p>
     <h3>Voluntary participation and withdrawal</h3>
-    <p>Participation is voluntary. You may stop at any time. After each completed form, your progress is saved so that you can leave and resume later from the next step.</p>
+    <p>Participation is voluntary. You may stop at any time. After each completed form or conversation, your progress is saved so that you can leave and resume later from the next step.</p>
     <h3>Research contact</h3>
     <p>For questions about the study, contact the researcher responsible for this thesis project.</p>
     <div class="section consent-checks">
       <label><input id="c1" type="checkbox"> I confirm that I am at least 18 years old.</label>
       <label><input id="c2" type="checkbox"> I understand that participation is voluntary and that I may stop at any time.</label>
-      <label><input id="c3" type="checkbox"> I agree that my questionnaire answers and Big Five scores may be saved for research analysis.</label>
+      <label><input id="c3" type="checkbox"> I agree that my questionnaire answers, Big Five scores, topic preferences, and chat messages may be saved for research analysis.</label>
     </div>` + actions('<button id="continue" disabled>Save and continue</button>');
   const btn = document.getElementById('continue');
   const update = () => { btn.disabled = !(c1.checked && c2.checked && c3.checked); };
@@ -465,8 +464,7 @@ function renderPre(errors = {}) {
   document.querySelectorAll('input[type="radio"]').forEach(el => el.addEventListener('change', () => { if (el.name === 'used_ai_before') renderAiFollowups(); updateButton(); }));
   renderAiFollowups();
   updateButton();
-
-  btn.onclick = async () => {
+    btn.onclick = async () => {
     const answers = collectPre();
     const validation = validatePre(answers);
     if (Object.keys(validation).length) return renderPre(validation);
@@ -527,7 +525,7 @@ function renderTopicsMost(err = '') {
 function renderTopicsLeast(most, err = '', shouldScrollTop = false) {
   if (shouldScrollTop) scrollToTopAfterRender();
   const savedLeast = loadDraft('least_interesting_topics', state.progress.least_topics || []).filter(id => !most.includes(id));
-  app.innerHTML = `<h2>Select the 2 topics you find least interesting</h2><p>Choose exactly 2 topics. Your two most-interesting topics are removed from this list.</p>${topicCards(savedLeast, most)}${err ? errorBox(err) : ''}` + actions('<button class="secondary" id="back">Back</button><button id="continue" disabled>Start conversation</button>');
+  app.innerHTML = `<h2>Select the 2 topics you find least interesting</h2><p>Choose exactly 2 topics. Your two most-interesting topics are removed from this list.</p>${topicCards(savedLeast, most)}${err ? errorBox(err) : ''}` + actions('<button class="secondary" id="back">Back</button><button id="continue" disabled>Start conversations</button>');
   const btn = document.getElementById('continue');
   function refresh() { const now = getCheckedTopics(); saveDraft('least_interesting_topics', now); renderTopicsLeast(most, err); }
   document.querySelectorAll('input[name="topic"]').forEach(cb => cb.addEventListener('change', refresh));
@@ -548,7 +546,16 @@ async function renderChat(err = '') {
   let data;
   try { data = await api(`/api/chat/${state.participant}`); } catch(e) { app.innerHTML = errorBox(e); return; }
 
-  const done = data.done || data.turns >= data.target_total_turns;
+  if (data.done) {
+    setProgress(await api(`/api/session`, {
+      method: 'POST',
+      body: JSON.stringify({ participant_id: state.participant })
+    }));
+    renderDone();
+    return;
+  }
+
+  const done = data.conversation_done || data.turns >= data.target_total_turns;
   const desktop = isDesktopDevice();
   const pageClass = desktop ? 'chat-page chat-page--desktop' : 'chat-page chat-page--native';
   const shellClass = desktop ? 'phone-shell' : 'native-chat-shell';
@@ -557,43 +564,43 @@ async function renderChat(err = '') {
     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
     <path d="M12 18a2 2 0 1 0 0 4a2 2 0 0 0 0-4zm0-4c-2.2 0-4.2.8-5.8 2.1l1.4 1.4c1.2-.9 2.7-1.5 4.4-1.5s3.2.5 4.4 1.5l1.4-1.4C16.2 14.8 14.2 14 12 14zm0-4c-3.4 0-6.5 1.2-9 3.3l1.4 1.4C6.5 12.9 9.1 12 12 12s5.5.9 7.6 2.7l1.4-1.4C18.5 11.2 15.4 10 12 10zm0-4C7.5 6 3.4 7.7.1 10.8l1.4 1.4C4.3 9.6 8 8 12 8s7.7 1.6 10.5 4.2l1.4-1.4C20.6 7.7 16.5 6 12 6z"/>
     </svg></span><span class="battery"><span class="battery-level"></span></span></span></div>` : '';
-  const inputHtml = done
-    ? '<p class="muted chat-complete">Conversation complete.</p>'
-    : `<form class="chat-form" id="chatForm"><div class="message-composer"><textarea id="chatText" rows="1" inputmode="text" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" placeholder="Message"></textarea><button aria-label="Send message" type="submit" class="send-btn" disabled><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="M5.5 11.5L12 5l6.5 6.5"></path></svg></button></div></form>`;
 
-  app.innerHTML = `<div class="${pageClass}">
+  const assignment = data.assignment || {};
+  const positionText = assignment.conversation_order && assignment.total_conversations
+  ? `Conversation ${assignment.conversation_order} of ${assignment.total_conversations}`
+  : 'Conversation';
+
+  const inputHtml = done
+    ? `<p class="muted chat-complete">${htmlEscape(positionText)} complete.</p>`
+    : `<form class="chat-form" id="chatForm"><div class="message-composer"><textarea id="chatText" rows="1" inputmode="text" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" placeholder="Message"></textarea><button aria-label="Send message" type="submit" class="send-btn" disabled><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="M5.5 11.5L12 5l6.5 6.5"></path></svg></button></div></form>`;
+    app.innerHTML = `<div class="${pageClass}">
     <div class="${shellClass}">
       <div class="${screenClass}">
         ${statusBar}
         <div class="phone-header">
           <div class="phone-avatar">A</div>
           <div class="phone-title">Alex</div>
+          <div class="muted" style="font-size:12px;margin-top:3px;">${htmlEscape(positionText)}</div>
         </div>
         <div class="phone-messages" id="messages">${visibleTranscript(data.transcript).map(chatMessageHtml).join('')}</div>
         ${inputHtml}
       </div>
     </div>
-  </div>${err ? errorBox(err) : ''}` + (done ? actions('<button id="finish">Finish experiment</button>') : '');
+  </div>${err ? errorBox(err) : ''}` + (done ? actions('<button id="finish">Next conversation</button>') : '');
 
   scrollMessagesToBottom();
   keepNativeInputVisible();
+
   clearInterval(window.__phoneClockInterval);
   window.__phoneClockInterval = setInterval(() => {
     const clock = document.querySelector('.phone-clock');
     if (clock) clock.textContent = iPhoneStatusTime();
   }, 30000);
+
   const form = document.getElementById('chatForm');
   const textEl = document.getElementById('chatText');
-  textEl.addEventListener('focus', () => {
-  document.body.classList.add('chat-input-focused');
-  keepNativeInputVisible();
-  setTimeout(scrollMessagesToBottom, 80);
-});
-
-textEl.addEventListener('blur', () => {
-  document.body.classList.remove('chat-input-focused');
-});
   const sendBtn = form ? form.querySelector('.send-btn') : null;
+
   const sendMessage = async () => {
     const text = textEl.value.trim();
     if (!text) return;
@@ -688,20 +695,24 @@ textEl.addEventListener('blur', () => {
       }
 
       const latestTurns = latestTranscript.length;
-      const latestDone = result.done || latestTurns >= data.target_total_turns;
+      const latestDone = result.conversation_done || result.done || latestTurns >= data.target_total_turns;
 
       if (latestDone) {
         const formEl = document.getElementById('chatForm');
 
         if (formEl) {
-          formEl.outerHTML = '<p class="muted chat-complete">Conversation complete.</p>';
+          formEl.outerHTML = `<p class="muted chat-complete">${htmlEscape(positionText)} complete.</p>`;
         }
 
-        setProgress(await api(`/api/finish/${state.participant}`, {
-          method: 'POST'
-        }));
+        app.insertAdjacentHTML('beforeend', actions('<button id="finish">Next conversation</button>'));
+        const finishBtn = document.getElementById('finish');
 
-        renderDone();
+        if (finishBtn) {
+          finishBtn.onclick = async () => {
+            const progress = await api(`/api/finish/${state.participant}`, { method: 'POST' });
+            renderProgressFromServer(progress);
+          };
+        }
       } else {
         data.transcript = latestTranscript;
         data.turns = latestTurns;
@@ -724,14 +735,16 @@ textEl.addEventListener('blur', () => {
       scrollMessagesToBottom();
     }
   };
+
   if (form && textEl) {
     form.onsubmit = async (ev) => { ev.preventDefault(); await sendMessage(); };
     updateComposerState(textEl, sendBtn);
+
     textEl.addEventListener('input', () => {
       updateComposerState(textEl, sendBtn);
-      if (isAndroidDevice() && document.activeElement === textEl) ensureAndroidKeyboardSpacer();
       setTimeout(scrollMessagesToBottom, 30);
     });
+
     textEl.addEventListener('keydown', async (ev) => {
       if (ev.key === 'Enter' && !ev.shiftKey) {
         ev.preventDefault();
@@ -741,35 +754,27 @@ textEl.addEventListener('blur', () => {
         }
       }
     });
+
     textEl.addEventListener('focus', () => {
+      document.body.classList.add('chat-input-focused');
       keepNativeInputVisible();
-
-      if (isAndroidDevice()) {
-        ensureAndroidKeyboardSpacer();
-      }
-
-      setTimeout(() => {
-        const formEl = document.getElementById('chatForm');
-        if (formEl && !isDesktopDevice()) {
-          formEl.scrollIntoView({ block: isAndroidDevice() ? 'center' : 'end', behavior: 'smooth' });
-        }
-        scrollMessagesToBottom();
-      }, 250);
-
-      setTimeout(() => {
-        const formEl = document.getElementById('chatForm');
-        if (formEl && !isDesktopDevice()) {
-          formEl.scrollIntoView({ block: isAndroidDevice() ? 'center' : 'end', behavior: 'smooth' });
-        }
-        scrollMessagesToBottom();
-      }, 700);
+      setTimeout(scrollMessagesToBottom, 80);
     });
 
-    textEl.addEventListener('blur', removeAndroidKeyboardSpacer);
+    textEl.addEventListener('blur', () => {
+      document.body.classList.remove('chat-input-focused');
+    });
   }
+
   const finish = document.getElementById('finish');
-  if (finish) finish.onclick = async () => { setProgress(await api(`/api/finish/${state.participant}`, { method: 'POST' })); renderDone(); };
+  if (finish) {
+    finish.onclick = async () => {
+      const progress = await api(`/api/finish/${state.participant}`, { method: 'POST' });
+      renderProgressFromServer(progress);
+    };
+  }
 }
+
 function renderDone() {
   if (participantLabel) participantLabel.textContent = state.participant ? `Participant: ${state.participant}` : '';
   app.innerHTML = `<div class="thank-you"><div class="thank-you-check">✓</div><h2>Thank you!</h2><p>Your responses have been submitted successfully.</p></div>`;

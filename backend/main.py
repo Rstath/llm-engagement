@@ -33,7 +33,7 @@ OPENROUTER_APP_NAME = os.getenv("OPENROUTER_APP_NAME", "LLM Engagement Study")
 
 # OpenRouter model IDs must exist exactly. These two are valid OpenRouter IDs.
 # If you run LM Studio, set these to the local model IDs shown in LM Studio.
-SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "google/gemma-3n-e4b-it:free")
+SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "google/gemma-3n-e4b-it")
 MEDIUM_LLM_MODEL = os.getenv("MEDIUM_LLM_MODEL", "google/gemma-3-27b-it")
 DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.7"))
 DEFAULT_MAX_AGENT_TOKENS = int(os.getenv("DEFAULT_MAX_AGENT_TOKENS", "130"))
@@ -78,11 +78,70 @@ def connect():
 def init_db():
     with connect() as conn:
         conn.executescript("""
-        CREATE TABLE IF NOT EXISTS participants (participant_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, current_step TEXT NOT NULL DEFAULT 'consent', updated_at TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS progress (participant_id TEXT PRIMARY KEY, consent_json TEXT NOT NULL DEFAULT '{}', pre_json TEXT NOT NULL DEFAULT '{}', big5_answers_json TEXT NOT NULL DEFAULT '{}', big5_scores_json TEXT NOT NULL DEFAULT '{}', most_topics_json TEXT NOT NULL DEFAULT '[]', least_topics_json TEXT NOT NULL DEFAULT '[]');
-        CREATE TABLE IF NOT EXISTS experiment_sessions (participant_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, topic_id TEXT NOT NULL, variation_id TEXT NOT NULL, topic_prompt TEXT NOT NULL, style_name TEXT NOT NULL, model_name TEXT NOT NULL, personality_context_enabled INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'active');
-        CREATE TABLE IF NOT EXISTS conversation_turns (turn_id TEXT PRIMARY KEY, participant_id TEXT NOT NULL, created_at TEXT NOT NULL, speaker TEXT NOT NULL, text TEXT NOT NULL, turn_index INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS participants (
+            participant_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            current_step TEXT NOT NULL DEFAULT 'consent',
+            updated_at TEXT NOT NULL,
+            completed INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS progress (
+            participant_id TEXT PRIMARY KEY,
+            consent_json TEXT NOT NULL DEFAULT '{}',
+            pre_json TEXT NOT NULL DEFAULT '{}',
+            big5_answers_json TEXT NOT NULL DEFAULT '{}',
+            big5_scores_json TEXT NOT NULL DEFAULT '{}',
+            most_topics_json TEXT NOT NULL DEFAULT '[]',
+            least_topics_json TEXT NOT NULL DEFAULT '[]'
+        );
+
+        -- Kept for backward compatibility with older exports/code.
+        CREATE TABLE IF NOT EXISTS experiment_sessions (
+            participant_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            topic_id TEXT NOT NULL,
+            variation_id TEXT NOT NULL,
+            topic_prompt TEXT NOT NULL,
+            style_name TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            personality_context_enabled INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active'
+        );
+
+        -- New architecture: one participant has a randomized queue of 16 conversations.
+        CREATE TABLE IF NOT EXISTS conversation_assignments (
+            session_id TEXT PRIMARY KEY,
+            participant_id TEXT NOT NULL,
+            conversation_order INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            topic_id TEXT NOT NULL,
+            variation_id TEXT NOT NULL,
+            topic_prompt TEXT NOT NULL,
+            topic_preference TEXT NOT NULL,
+            style_name TEXT NOT NULL,
+            model_size TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            personality_context_enabled INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            UNIQUE(participant_id, conversation_order)
+        );
+
+        CREATE TABLE IF NOT EXISTS conversation_turns (
+            turn_id TEXT PRIMARY KEY,
+            participant_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            speaker TEXT NOT NULL,
+            text TEXT NOT NULL,
+            turn_index INTEGER NOT NULL,
+            session_id TEXT
+        );
         """)
+        # Safe migration for existing local SQLite databases created before session_id existed.
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(conversation_turns)").fetchall()]
+        if "session_id" not in cols:
+            conn.execute("ALTER TABLE conversation_turns ADD COLUMN session_id TEXT")
         conn.commit()
 
 def jdump(v): return json.dumps(v, ensure_ascii=False)
@@ -134,33 +193,176 @@ def stable_choice(seed_text: str, values: List[str]) -> str:
     n = int(hashlib.sha256(seed_text.encode()).hexdigest(), 16)
     return values[n % len(values)]
 
-def ensure_assignment(pid):
-    with connect() as conn:
-        row = conn.execute("SELECT * FROM experiment_sessions WHERE participant_id=?", (pid,)).fetchone()
-        if row: return dict(row)
-    prog = get_progress(pid)
-    selected = list(dict.fromkeys((prog.get("most_topics") or []) + (prog.get("least_topics") or []))) or list(TOPICS.keys())
-    topic_id = stable_choice(pid + ":topic", selected)
-    variation_id = stable_choice(pid + ":variation", ["A","B","C","D"])
-    model_size = stable_choice(pid + ":model", ["small","medium"])
-    personality_enabled = stable_choice(pid + ":context", ["0","1"]) == "1"
-    style_name = stable_choice(pid + ":style", list(STYLE_PROMPTS.keys()))
-    model_name = MEDIUM_LLM_MODEL if model_size == "medium" else SMALL_LLM_MODEL
-    topic_prompt = TOPICS[topic_id]["variations"][variation_id]
-    with connect() as conn:
-        conn.execute("""INSERT INTO experiment_sessions(participant_id,created_at,updated_at,topic_id,variation_id,topic_prompt,style_name,model_name,personality_context_enabled,status) VALUES(?,?,?,?,?,?,?,?,?,?)""", (pid, now(), now(), topic_id, variation_id, topic_prompt, style_name, model_name, int(personality_enabled), "active"))
-        conn.commit()
-    return ensure_assignment(pid)
 
-def load_transcript(pid):
+def shuffled_for_participant(pid: str, salt: str, values: List[Any]) -> List[Any]:
+    """Stable randomization: randomized once per participant but reproducible."""
+    rng = random.Random(int(hashlib.sha256(f"{pid}:{salt}".encode()).hexdigest(), 16))
+    out = list(values)
+    rng.shuffle(out)
+    return out
+
+
+def selected_experiment_topics(pid: str) -> List[str]:
+    """Return exactly the 4 selected topics: 2 most interesting + 2 least interesting."""
+    prog = get_progress(pid)
+    selected = list(dict.fromkeys((prog.get("most_topics") or []) + (prog.get("least_topics") or [])))
+    if len(selected) != 4:
+        raise HTTPException(400, "Participant must select exactly 2 most and 2 least interesting topics before chat assignment.")
+    return selected
+
+
+def topic_preference_label(pid: str, topic_id: str) -> str:
+    prog = get_progress(pid)
+    if topic_id in (prog.get("most_topics") or []):
+        return "most"
+    if topic_id in (prog.get("least_topics") or []):
+        return "least"
+    return "selected"
+
+
+def generate_conversation_assignments(pid: str, reset_existing: bool = False):
+    """Create the 16-condition randomized schedule for one participant.
+
+    Design respected:
+    - 4 participant-selected topics = 2 most + 2 least interesting
+    - 2 LLM sizes = small, medium
+    - 2 personality-context settings = false, true
+    - 4 topics × 2 sizes × 2 context = 16 conversations
+    - each topic uses 2 equivalent scenario variants, balanced across its 4 conditions
+    """
+    selected_topics = selected_experiment_topics(pid)
+
     with connect() as conn:
-        rows = conn.execute("SELECT speaker,text,created_at FROM conversation_turns WHERE participant_id=? ORDER BY turn_index ASC", (pid,)).fetchall()
+        existing = conn.execute(
+            "SELECT COUNT(*) FROM conversation_assignments WHERE participant_id=?",
+            (pid,),
+        ).fetchone()[0]
+        if existing and not reset_existing:
+            return
+        if reset_existing:
+            session_rows = conn.execute(
+                "SELECT session_id FROM conversation_assignments WHERE participant_id=?",
+                (pid,),
+            ).fetchall()
+            session_ids = [r[0] for r in session_rows]
+            if session_ids:
+                conn.executemany("DELETE FROM conversation_turns WHERE session_id=?", [(sid,) for sid in session_ids])
+            conn.execute("DELETE FROM conversation_assignments WHERE participant_id=?", (pid,))
+            conn.execute("DELETE FROM experiment_sessions WHERE participant_id=?", (pid,))
+
+        rows = []
+        for topic_id in selected_topics:
+            variations = shuffled_for_participant(pid, f"{topic_id}:variants", list(TOPICS[topic_id]["variations"].keys()))[:2]
+            combos = [("small", False), ("small", True), ("medium", False), ("medium", True)]
+            combos = shuffled_for_participant(pid, f"{topic_id}:model-context", combos)
+            # Use exactly two equivalent scenario variants per topic, each appearing twice.
+            variant_slots = shuffled_for_participant(pid, f"{topic_id}:variant-slots", [variations[0], variations[0], variations[1], variations[1]])
+            for idx, (model_size, personality_enabled) in enumerate(combos):
+                variation_id = variant_slots[idx]
+                rows.append({
+                    "topic_id": topic_id,
+                    "variation_id": variation_id,
+                    "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
+                    "topic_preference": topic_preference_label(pid, topic_id),
+                    "style_name": stable_choice(f"{pid}:{topic_id}:{idx}:style", list(STYLE_PROMPTS.keys())),
+                    "model_size": model_size,
+                    "model_name": MEDIUM_LLM_MODEL if model_size == "medium" else SMALL_LLM_MODEL,
+                    "personality_context_enabled": personality_enabled,
+                })
+
+        rows = shuffled_for_participant(pid, "conversation-order", rows)
+        for order, row in enumerate(rows, start=1):
+            conn.execute(
+                """
+                INSERT INTO conversation_assignments(
+                    session_id, participant_id, conversation_order, created_at, updated_at,
+                    topic_id, variation_id, topic_prompt, topic_preference, style_name,
+                    model_size, model_name, personality_context_enabled, status
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    str(uuid.uuid4()), pid, order, now(), now(),
+                    row["topic_id"], row["variation_id"], row["topic_prompt"], row["topic_preference"], row["style_name"],
+                    row["model_size"], row["model_name"], int(row["personality_context_enabled"]), "pending",
+                ),
+            )
+        conn.commit()
+
+
+def count_assignments(pid: str) -> Dict[str, int]:
+    with connect() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM conversation_assignments WHERE participant_id=?", (pid,)).fetchone()[0]
+        complete = conn.execute("SELECT COUNT(*) FROM conversation_assignments WHERE participant_id=? AND status='complete'", (pid,)).fetchone()[0]
+    return {"total": int(total), "complete": int(complete), "remaining": int(total - complete)}
+
+
+def ensure_assignment(pid):
+    generate_conversation_assignments(pid)
+    with connect() as conn:
+        # Continue an already-started active conversation first.
+        row = conn.execute(
+            """
+            SELECT * FROM conversation_assignments
+            WHERE participant_id=? AND status='active'
+            ORDER BY conversation_order ASC
+            LIMIT 1
+            """,
+            (pid,),
+        ).fetchone()
+        if row:
+            return dict(row)
+
+        # Otherwise open the next randomized pending conversation.
+        row = conn.execute(
+            """
+            SELECT * FROM conversation_assignments
+            WHERE participant_id=? AND status='pending'
+            ORDER BY conversation_order ASC
+            LIMIT 1
+            """,
+            (pid,),
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute(
+            "UPDATE conversation_assignments SET status='active', updated_at=? WHERE session_id=?",
+            (now(), row["session_id"]),
+        )
+        conn.commit()
+        return dict(conn.execute("SELECT * FROM conversation_assignments WHERE session_id=?", (row["session_id"],)).fetchone())
+
+
+def mark_assignment_complete(session_id: str):
+    with connect() as conn:
+        conn.execute("UPDATE conversation_assignments SET status='complete', updated_at=? WHERE session_id=?", (now(), session_id))
+        conn.commit()
+
+
+def load_transcript(pid, session_id: Optional[str] = None):
+    with connect() as conn:
+        if session_id:
+            rows = conn.execute(
+                "SELECT speaker,text,created_at FROM conversation_turns WHERE participant_id=? AND session_id=? ORDER BY turn_index ASC",
+                (pid, session_id),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT speaker,text,created_at FROM conversation_turns WHERE participant_id=? ORDER BY turn_index ASC",
+                (pid,),
+            ).fetchall()
     return [dict(r) for r in rows]
 
-def save_turn(pid, speaker, text):
+
+def save_turn(pid, speaker, text, session_id: Optional[str] = None):
     with connect() as conn:
-        idx = conn.execute("SELECT COALESCE(MAX(turn_index),-1)+1 FROM conversation_turns WHERE participant_id=?", (pid,)).fetchone()[0]
-        conn.execute("INSERT INTO conversation_turns VALUES(?,?,?,?,?,?)", (str(uuid.uuid4()), pid, now(), speaker, text, int(idx)))
+        idx = conn.execute(
+            "SELECT COALESCE(MAX(turn_index),-1)+1 FROM conversation_turns WHERE participant_id=? AND COALESCE(session_id,'')=COALESCE(?, '')",
+            (pid, session_id),
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO conversation_turns(turn_id,participant_id,created_at,speaker,text,turn_index,session_id) VALUES(?,?,?,?,?,?,?)",
+            (str(uuid.uuid4()), pid, now(), speaker, text, int(idx), session_id),
+        )
         conn.commit()
 
 def personality_context(pid):
@@ -340,40 +542,110 @@ def topics(data: TopicsIn):
     if set(data.most_topics) & set(data.least_topics): raise HTTPException(400, "Least interesting topics cannot include selected most interesting topics")
     with connect() as conn:
         conn.execute("UPDATE progress SET most_topics_json=?, least_topics_json=? WHERE participant_id=?", (jdump(data.most_topics), jdump(data.least_topics), data.participant_id)); conn.commit()
+    generate_conversation_assignments(data.participant_id, reset_existing=True)
     set_step(data.participant_id, "chat")
     return get_progress(data.participant_id)
 
 @app.get("/api/chat/{participant_id}")
 def chat(participant_id: str):
     assignment = ensure_assignment(participant_id)
-    transcript = load_transcript(participant_id)
+    counts = count_assignments(participant_id)
+    if not assignment:
+        set_step(participant_id, "done", completed=1)
+        return {"done": True, "all_done": True, "transcript": [], "turns": 0, "target_total_turns": TARGET_TOTAL_TURNS, "assignment_counts": counts}
+
+    transcript = load_transcript(participant_id, assignment["session_id"])
     if not transcript:
-        save_turn(participant_id, "Agent", make_opening(participant_id, assignment))
-        transcript = load_transcript(participant_id)
-    return {"assignment":{"topic_id":assignment["topic_id"],"topic_prompt":assignment["topic_prompt"],"style_name":assignment["style_name"],"status":assignment["status"]}, "transcript": transcript, "turns": len(transcript), "target_total_turns": TARGET_TOTAL_TURNS}
+        save_turn(participant_id, "Agent", make_opening(participant_id, assignment), assignment["session_id"])
+        transcript = load_transcript(participant_id, assignment["session_id"])
+
+    return {
+        "done": False,
+        "all_done": False,
+        "assignment": {
+            "session_id": assignment["session_id"],
+            "conversation_order": assignment["conversation_order"],
+            "total_conversations": counts["total"],
+            "completed_conversations": counts["complete"],
+            "remaining_conversations": counts["remaining"],
+            "topic_id": assignment["topic_id"],
+            "variation_id": assignment["variation_id"],
+            "topic_prompt": assignment["topic_prompt"],
+            "topic_preference": assignment["topic_preference"],
+            "style_name": assignment["style_name"],
+            "model_size": assignment["model_size"],
+            "model_name": assignment["model_name"],
+            "personality_context_enabled": bool(assignment["personality_context_enabled"]),
+            "status": assignment["status"],
+        },
+        "assignment_counts": counts,
+        "transcript": transcript,
+        "turns": len(transcript),
+        "target_total_turns": TARGET_TOTAL_TURNS,
+    }
+
 
 @app.post("/api/chat")
 def chat_send(data: ChatIn):
     text = data.text.strip()
-    if not text: raise HTTPException(400, "Message is empty")
+    if not text:
+        raise HTTPException(400, "Message is empty")
+
     assignment = ensure_assignment(data.participant_id)
-    save_turn(data.participant_id, "Human", text)
-    transcript = load_transcript(data.participant_id)
-    if len(transcript) >= TARGET_TOTAL_TURNS:
+    if not assignment:
         set_step(data.participant_id, "done", completed=1)
-        with connect() as conn:
-            conn.execute("UPDATE experiment_sessions SET status=?, updated_at=? WHERE participant_id=?", ("complete", now(), data.participant_id)); conn.commit()
-        return {"done": True, "transcript": transcript}
+        return {"done": True, "all_done": True, "transcript": []}
+
+    session_id = assignment["session_id"]
+    save_turn(data.participant_id, "Human", text, session_id)
+    transcript = load_transcript(data.participant_id, session_id)
+
+    if len(transcript) >= TARGET_TOTAL_TURNS:
+        mark_assignment_complete(session_id)
+        counts = count_assignments(data.participant_id)
+        all_done = counts["remaining"] == 0
+        if all_done:
+            set_step(data.participant_id, "done", completed=1)
+        return {"done": True, "all_done": all_done, "transcript": transcript, "assignment_counts": counts}
+
     reply = make_reply(data.participant_id, assignment, transcript)
-    save_turn(data.participant_id, "Agent", reply)
-    transcript = load_transcript(data.participant_id)
-    return {"done": len(transcript) >= TARGET_TOTAL_TURNS, "transcript": transcript}
+    save_turn(data.participant_id, "Agent", reply, session_id)
+    transcript = load_transcript(data.participant_id, session_id)
+
+    conversation_done = len(transcript) >= TARGET_TOTAL_TURNS
+    if conversation_done:
+        mark_assignment_complete(session_id)
+    counts = count_assignments(data.participant_id)
+    all_done = counts["remaining"] == 0
+    if all_done and conversation_done:
+        set_step(data.participant_id, "done", completed=1)
+
+    return {"done": conversation_done, "all_done": all_done, "transcript": transcript, "assignment_counts": counts}
+
 
 @app.post("/api/finish/{participant_id}")
 def finish(participant_id: str):
-    set_step(participant_id, "done", completed=1)
     with connect() as conn:
-        conn.execute("UPDATE experiment_sessions SET status=?, updated_at=? WHERE participant_id=?", ("complete", now(), participant_id)); conn.commit()
+        active = conn.execute(
+            """
+            SELECT * FROM conversation_assignments
+            WHERE participant_id=? AND status='active'
+            ORDER BY conversation_order ASC
+            LIMIT 1
+            """,
+            (participant_id,),
+        ).fetchone()
+
+    if active:
+        mark_assignment_complete(active["session_id"])
+
+    counts = count_assignments(participant_id)
+
+    if counts["remaining"] <= 0:
+        set_step(participant_id, "done", completed=1)
+    else:
+        set_step(participant_id, "chat", completed=0)
+
     return get_progress(participant_id)
 
 @app.post("/api/researcher/login")
@@ -385,18 +657,46 @@ def researcher_login(data: LoginIn):
 def overview():
     with connect() as conn:
         participants = [dict(r) for r in conn.execute("SELECT * FROM participants ORDER BY created_at DESC").fetchall()]
-        sessions = [dict(r) for r in conn.execute("SELECT * FROM experiment_sessions ORDER BY created_at DESC").fetchall()]
+        sessions = [dict(r) for r in conn.execute("SELECT * FROM conversation_assignments ORDER BY participant_id, conversation_order ASC").fetchall()]
     return {"participants": participants, "sessions": sessions}
+
 
 @app.get("/api/researcher/participant/{participant_id}", dependencies=[Depends(require_researcher)])
 def participant_detail(participant_id: str):
-    return {"progress": get_progress(participant_id), "assignment": ensure_assignment(participant_id), "transcript": load_transcript(participant_id)}
+    assignment = ensure_assignment(participant_id)
+    session_id = assignment["session_id"] if assignment else None
+    with connect() as conn:
+        assignments = [dict(r) for r in conn.execute("SELECT * FROM conversation_assignments WHERE participant_id=? ORDER BY conversation_order ASC", (participant_id,)).fetchall()]
+    return {"progress": get_progress(participant_id), "assignment": assignment, "assignments": assignments, "transcript": load_transcript(participant_id, session_id)}
+
 
 @app.get("/api/researcher/export.csv", dependencies=[Depends(require_researcher)])
 def export_csv():
-    out = io.StringIO(); writer = csv.writer(out)
-    writer.writerow(["participant_id","created_at","current_step","completed","speaker","text","timestamp"])
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow([
+        "participant_id", "participant_created_at", "current_step", "completed",
+        "session_id", "conversation_order", "assignment_status", "topic_id", "variation_id",
+        "topic_preference", "model_size", "model_name", "personality_context_enabled",
+        "style_name", "speaker", "text", "timestamp"
+    ])
     with connect() as conn:
-        rows = conn.execute("""SELECT p.participant_id,p.created_at,p.current_step,p.completed,c.speaker,c.text,c.created_at AS turn_time FROM participants p LEFT JOIN conversation_turns c ON p.participant_id=c.participant_id ORDER BY p.created_at DESC, c.turn_index ASC""").fetchall()
-    for r in rows: writer.writerow([r["participant_id"],r["created_at"],r["current_step"],r["completed"],r["speaker"] or "",r["text"] or "",r["turn_time"] or ""])
+        rows = conn.execute("""
+            SELECT
+                p.participant_id, p.created_at AS participant_created_at, p.current_step, p.completed,
+                a.session_id, a.conversation_order, a.status AS assignment_status, a.topic_id, a.variation_id,
+                a.topic_preference, a.model_size, a.model_name, a.personality_context_enabled, a.style_name,
+                c.speaker, c.text, c.created_at AS turn_time, c.turn_index
+            FROM participants p
+            LEFT JOIN conversation_assignments a ON p.participant_id=a.participant_id
+            LEFT JOIN conversation_turns c ON a.session_id=c.session_id
+            ORDER BY p.created_at DESC, a.conversation_order ASC, c.turn_index ASC
+        """).fetchall()
+    for r in rows:
+        writer.writerow([
+            r["participant_id"], r["participant_created_at"], r["current_step"], r["completed"],
+            r["session_id"] or "", r["conversation_order"] or "", r["assignment_status"] or "", r["topic_id"] or "", r["variation_id"] or "",
+            r["topic_preference"] or "", r["model_size"] or "", r["model_name"] or "", r["personality_context_enabled"] if r["personality_context_enabled"] is not None else "",
+            r["style_name"] or "", r["speaker"] or "", r["text"] or "", r["turn_time"] or "",
+        ])
     return Response(out.getvalue(), media_type="text/csv", headers={"Content-Disposition":"attachment; filename=llm_engagement_export.csv"})

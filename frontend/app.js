@@ -286,65 +286,91 @@ function scrollToTopAfterRender() {
   });
 }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-const AGENT_TEXT_LIMIT = 95;
+const AGENT_TEXT_LIMIT = 82;
+const FOLLOWUP_WAIT_MIN_MS = 2600;
+const FOLLOWUP_WAIT_MAX_MS = 4200;
 
 function randomBetween(min, max) {
   return Math.floor(min + Math.random() * (max - min + 1));
 }
 
-function splitAgentText(text, limit = AGENT_TEXT_LIMIT) {
-  const clean = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!clean) return [];
+function cleanAgentBubbleText(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.!?])/g, '$1')
+    .trim();
+}
 
+function splitAgentText(text, limit = AGENT_TEXT_LIMIT) {
+  const clean = cleanAgentBubbleText(text);
+  if (!clean) return [];
   if (clean.length <= limit) return [clean];
 
-  const parts = [];
-  let remaining = clean;
+  const words = clean.split(' ');
+  const softBreakWords = new Set([
+    'also', 'but', 'so', 'maybe', 'honestly', 'tbh', 'like', 'still',
+    'sth', 'smth', 'or', 'and', 'then', 'plus', 'esp', 'bc', 'cause'
+  ]);
 
-  while (remaining.length > limit && parts.length < 2) {
-    const slice = remaining.slice(0, limit + 1);
+  let best = -1;
+  let charCount = 0;
 
-    let cut = Math.max(
-      slice.lastIndexOf('. '),
-      slice.lastIndexOf('? '),
-      slice.lastIndexOf('! '),
-      slice.lastIndexOf(', '),
-      slice.lastIndexOf(' ')
-    );
+  for (let i = 0; i < words.length - 1; i++) {
+    charCount += words[i].length + (i === 0 ? 0 : 1);
+    const next = words[i + 1].toLowerCase().replace(/[^a-z]/g, '');
+    const current = words[i];
+    const inGoodRange = charCount >= 34 && charCount <= limit;
 
-    if (cut < 35) cut = limit;
+    if (!inGoodRange) continue;
 
-    parts.push(remaining.slice(0, cut).trim());
-    remaining = remaining.slice(cut).trim();
+    if (/[,.!?]$/.test(current)) best = i + 1;
+    else if (softBreakWords.has(next)) best = i + 1;
+    else if (charCount >= Math.floor(limit * 0.68)) best = i + 1;
   }
 
-  if (remaining) {
-    if (parts.length >= 2) {
-      parts[1] = `${parts[1]} ${remaining}`.trim();
-    } else {
-      parts.push(remaining);
+  if (best < 3) {
+    charCount = 0;
+    for (let i = 0; i < words.length - 1; i++) {
+      charCount += words[i].length + (i === 0 ? 0 : 1);
+      if (charCount >= Math.floor(limit * 0.55)) {
+        best = i + 1;
+        break;
+      }
     }
   }
 
-  return parts.filter(Boolean).slice(0, 2);
+  if (best < 3) return [clean];
+
+  const first = words.slice(0, best).join(' ').trim();
+  const second = words.slice(best).join(' ').trim();
+
+  if (!second || first.length < 18 || second.length < 12) return [clean];
+  if (second.length > limit + 35) return [first, second.slice(0, limit + 35).trim()];
+  return [first, second].filter(Boolean).slice(0, 2);
 }
 
 function readingDelay(userText) {
   const chars = String(userText || '').length;
-  const readingMs = chars * randomBetween(42, 72);
-  const reactionMs = randomBetween(450, 1300);
-  return Math.min(4200, Math.max(800, readingMs + reactionMs));
+  const readingMs = chars * randomBetween(55, 90);
+  const reactionMs = randomBetween(900, 1800);
+  return Math.min(6500, Math.max(1600, readingMs + reactionMs));
 }
 
 function writingDelay(agentText) {
   const chars = String(agentText || '').length;
-  const typingMs = chars * randomBetween(190, 330);
-  const thinkingMs = randomBetween(300, 1200);
-  return Math.min(5200, Math.max(900, typingMs + thinkingMs));
+  const typingMs = chars * randomBetween(85, 145);
+  const thinkingMs = randomBetween(800, 1800);
+  return Math.min(7000, Math.max(1800, typingMs + thinkingMs));
+}
+
+function followupWaitDelay(userText) {
+  const chars = String(userText || '').length;
+  const extra = Math.min(900, chars * 8);
+  return randomBetween(FOLLOWUP_WAIT_MIN_MS, FOLLOWUP_WAIT_MAX_MS) + extra;
 }
 
 function interBubbleDelay() {
-  return randomBetween(450, 1300);
+  return randomBetween(650, 1500);
 }
 
 function agentTypingDelay(text) {
@@ -847,86 +873,69 @@ async function renderChat(err = '') {
   const textEl = document.getElementById('chatText');
   const sendBtn = form ? form.querySelector('.send-btn') : null;
 
-  const sendMessage = async () => {
-    const text = textEl.value.trim();
-    if (!text) return;
+  let pendingUserTexts = [];
+  let pendingSendTimer = null;
+  let agentRequestInFlight = false;
 
-    textEl.value = '';
-    updateComposerState(textEl, sendBtn);
+  function insertTypingRow() {
+    const messages = document.getElementById('messages');
+    if (!messages || messages.querySelector('.typing-row')) return;
+    messages.insertAdjacentHTML(
+      'beforeend',
+      `<div class="message-row Agent typing-row">
+        <div class="message-sender">Alex</div>
+        <div class="message-line">
+          <div class="agent-mini-avatar">A</div>
+          <div class="bubble Agent typing" aria-label="Alex is typing">
+            <span></span><span></span><span></span>
+          </div>
+        </div>
+      </div>`
+    );
+    scrollMessagesToBottom();
+  }
+
+  function removeTypingRow() {
+    const messages = document.getElementById('messages');
+    const typing = messages?.querySelector('.typing-row');
+    if (typing) typing.remove();
+  }
+
+  async function flushPendingUserTexts() {
+    if (agentRequestInFlight || !pendingUserTexts.length) return;
+
+    const batchTexts = [...pendingUserTexts];
+    pendingUserTexts = [];
+    agentRequestInFlight = true;
 
     const messages = document.getElementById('messages');
-        messages.insertAdjacentHTML(
-      'beforeend',
-      chatMessageHtml({
-        speaker: 'Human',
-        text,
-        created_at: new Date().toISOString()
-      })
-    );
-
-    scrollMessagesToBottom();
+    const apiText = batchTexts.join('\n');
+    const previousTranscriptLength = data.transcript?.length || 0;
 
     try {
-      await sleep(readingDelay(text));
-
-      messages.insertAdjacentHTML(
-        'beforeend',
-        `<div class="message-row Agent typing-row">
-          <div class="message-sender">Alex</div>
-          <div class="message-line">
-            <div class="agent-mini-avatar">A</div>
-            <div class="bubble Agent typing" aria-label="Alex is typing">
-              <span></span><span></span><span></span>
-            </div>
-          </div>
-        </div>`
-      );
-
-      scrollMessagesToBottom();
+      await sleep(readingDelay(apiText));
+      insertTypingRow();
 
       const result = await api('/api/chat', {
         method: 'POST',
         body: JSON.stringify({
           participant_id: state.participant,
-          text
+          text: apiText
         })
       });
 
       const latestTranscript = result.transcript || [];
-
-      const latestAgent = [...latestTranscript]
-        .reverse()
-        .find(t => t.speaker === 'Agent' || t.speaker === 'agent');
-
-      const agentParts = splitAgentText(latestAgent?.text || '');
+      const newTurns = latestTranscript.slice(previousTranscriptLength);
+      const newAgent = newTurns.find(t => t.speaker === 'Agent' || t.speaker === 'agent');
+      const agentParts = splitAgentText(newAgent?.text || '');
 
       for (let i = 0; i < agentParts.length; i++) {
-        let typing = messages.querySelector('.typing-row');
+        insertTypingRow();
 
-        if (!typing) {
-          messages.insertAdjacentHTML(
-            'beforeend',
-            `<div class="message-row Agent typing-row">
-              <div class="message-sender">Alex</div>
-              <div class="message-line">
-                <div class="agent-mini-avatar">A</div>
-                <div class="bubble Agent typing" aria-label="Alex is typing">
-                  <span></span><span></span><span></span>
-                </div>
-              </div>
-            </div>`
-          );
-          typing = messages.querySelector('.typing-row');
-          scrollMessagesToBottom();
-        }
-
-        if (i > 0) {
-          await sleep(interBubbleDelay());
-        }
-
+        if (i > 0) await sleep(interBubbleDelay());
         await sleep(writingDelay(agentParts[i]));
 
-        if (typing) typing.remove();
+        removeTypingRow();
 
         messages.insertAdjacentHTML(
           'beforeend',
@@ -938,37 +947,22 @@ async function renderChat(err = '') {
         );
 
         scrollMessagesToBottom();
-
-        if (i < agentParts.length - 1) {
-          messages.insertAdjacentHTML(
-            'beforeend',
-            `<div class="message-row Agent typing-row">
-              <div class="message-sender">Alex</div>
-              <div class="message-line">
-                <div class="agent-mini-avatar">A</div>
-                <div class="bubble Agent typing" aria-label="Alex is typing">
-                  <span></span><span></span><span></span>
-                </div>
-              </div>
-            </div>`
-          );
-          scrollMessagesToBottom();
-        }
       }
+
+      removeTypingRow();
 
       const latestTurns = latestTranscript.length;
       const latestDone = result.conversation_done || result.done || latestTurns >= data.target_total_turns;
 
       if (latestDone) {
         const formEl = document.getElementById('chatForm');
+        if (formEl) formEl.outerHTML = `<p class="muted chat-complete">Conversation complete.</p>`;
 
-        if (formEl) {
-          formEl.outerHTML = `<p class="muted chat-complete">Conversation complete.</p>`;
+        if (!document.getElementById('finish')) {
+          app.insertAdjacentHTML('beforeend', actions('<button id="finish">Next conversation</button>'));
         }
 
-        app.insertAdjacentHTML('beforeend', actions('<button id="finish">Next conversation</button>'));
         const finishBtn = document.getElementById('finish');
-
         if (finishBtn) {
           finishBtn.onclick = async () => {
             const progress = await api(`/api/finish/${state.participant}`, { method: 'POST' });
@@ -978,13 +972,13 @@ async function renderChat(err = '') {
       } else {
         data.transcript = latestTranscript;
         data.turns = latestTurns;
+        textEl.disabled = false;
+        sendBtn.disabled = !textEl.value.trim();
         textEl.focus({ preventScroll: true });
       }
 
     } catch (e) {
-      const typing = messages.querySelector('.typing-row');
-      if (typing) typing.remove();
-
+      removeTypingRow();
       messages.insertAdjacentHTML(
         'beforeend',
         chatMessageHtml({
@@ -993,9 +987,40 @@ async function renderChat(err = '') {
           created_at: new Date().toISOString()
         })
       );
-
       scrollMessagesToBottom();
+    } finally {
+      agentRequestInFlight = false;
+      if (pendingUserTexts.length) {
+        clearTimeout(pendingSendTimer);
+        pendingSendTimer = setTimeout(flushPendingUserTexts, followupWaitDelay(pendingUserTexts.join('\n')));
+      }
     }
+  }
+
+  const sendMessage = async () => {
+    if (agentRequestInFlight) return;
+
+    const text = textEl.value.trim();
+    if (!text) return;
+
+    textEl.value = '';
+    updateComposerState(textEl, sendBtn);
+
+    const messages = document.getElementById('messages');
+    messages.insertAdjacentHTML(
+      'beforeend',
+      chatMessageHtml({
+        speaker: 'Human',
+        text,
+        created_at: new Date().toISOString()
+      })
+    );
+
+    scrollMessagesToBottom();
+    pendingUserTexts.push(text);
+
+    clearTimeout(pendingSendTimer);
+    pendingSendTimer = setTimeout(flushPendingUserTexts, followupWaitDelay(pendingUserTexts.join('\n')));
   };
 
   if (form && textEl) {

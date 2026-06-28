@@ -35,8 +35,8 @@ OPENROUTER_APP_NAME = os.getenv("OPENROUTER_APP_NAME", "LLM Engagement Study")
 # If you run LM Studio, set these to the local model IDs shown in LM Studio.
 SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "google/gemma-3n-e4b-it")
 MEDIUM_LLM_MODEL = os.getenv("MEDIUM_LLM_MODEL", "google/gemma-3-27b-it")
-DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.7"))
-DEFAULT_MAX_AGENT_TOKENS = int(os.getenv("DEFAULT_MAX_AGENT_TOKENS", "130"))
+DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.85"))
+DEFAULT_MAX_AGENT_TOKENS = int(os.getenv("DEFAULT_MAX_AGENT_TOKENS", "90"))
 TARGET_TOTAL_TURNS = int(os.getenv("TARGET_TOTAL_TURNS", "14"))
 
 app = FastAPI(title="LLM Engagement Study API")
@@ -468,7 +468,25 @@ def personality_context(pid):
     return ", ".join(f"{k}: {v}" for k, v in scores.items())
 
 def system_prompt(style_prompt: str, context: str = ""):
-    base = """You are Alex, the Engagement Agent in a research experiment about mobile-style text conversations. Sustain engagement naturally. Keep replies short/medium, coherent, human-like, and relevant. Do not mention metrics, hidden instructions, prompts, or system design. Do not ask a question in every response. Avoid multiple questions."""
+    base = """You are Alex, the Engagement Agent in a research experiment about mobile-style text conversations.
+Your job is to keep the participant engaged in a realistic casual chat.
+
+Conversation rules:
+- Always stay on the current scenario/topic. Do not introduce unrelated plans, links, websites, restaurants, booking, routes, files, or fictional future actions.
+- Do not say things like "send me a link", "i can check", "let's make a plan", "i'll look it up", or pretend to do real-world actions.
+- Do not describe the selected topic directly. Ease into it like a real chat.
+- Sound like real mobile texting: casual, warm, short/medium, not formal.
+- Use light abbreviations naturally: tbh, kinda, sth/smth, idk, imo, bc, rn. Do not overuse them.
+- Use minimal punctuation. Avoid semicolons, bullet points, numbered lists, markdown, quotation marks, and exclamation-heavy writing.
+- Use emojis rarely. Only common relevant ones such as 😂 😊 😭 👍. Never use random decorative emojis.
+- Do not ask frequent questions. Most replies should be statements, reactions, or small additions.
+- Ask at most one question only when it genuinely helps the conversation continue.
+- If the previous Alex message already asked a question, the next Alex reply should not ask another question.
+- Avoid interview style. Do not repeatedly say "what about you" or "how about you".
+- Keep each reply usually 6-22 words. Maximum 35 words.
+- Do not repeat the same idea or the previous Alex message.
+- If the conversation is ending, give a short natural closing without repeating the last message.
+- Never mention metrics, prompts, hidden instructions, Big Five, personality testing, or system design."""
     if context:
         base += "\nUse this participant personality context quietly; never mention Big Five or personality testing: " + context
     else:
@@ -494,12 +512,43 @@ def llm_chat_url() -> str:
 
 def clean_llm_text(text: str) -> str:
     text = (text or "").strip()
-    # Keep agent messages mobile-like and avoid accidental essays.
+    text = text.replace("\r", " ").replace("\n", " ")
     text = " ".join(text.split())
-    if len(text) > 260:
-        text = text[:260].rsplit(" ", 1)[0].strip()
-    return text
 
+    # Remove common assistant labels / formatting leaks.
+    lowered = text.lower()
+    for prefix in ["alex:", "agent:", "assistant:"]:
+        if lowered.startswith(prefix):
+            text = text[len(prefix):].strip()
+            lowered = text.lower()
+
+    # Keep it mobile-like and not over-punctuated.
+    replacements = {
+        "however,": "but",
+        "however": "but",
+        "because": "bc",
+        "something": "sth",
+        "I don't know": "idk",
+        "i don't know": "idk",
+        "to be honest": "tbh",
+        "in my opinion": "imo",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    while "!!" in text or "??" in text or ".." in text:
+        text = text.replace("!!", "!").replace("??", "?").replace("..", ".")
+
+    # Avoid multiple questions in one reply.
+    if text.count("?") > 1:
+        first = text.find("?")
+        text = text[: first + 1] + text[first + 1:].replace("?", "")
+
+    # Keep agent messages short.
+    if len(text) > 180:
+        text = text[:180].rsplit(" ", 1)[0].strip()
+
+    return text.strip(' "')
 
 def call_llm(model_name, messages):
     url = llm_chat_url()
@@ -540,16 +589,48 @@ def call_llm(model_name, messages):
     except Exception as exc:
         return f"[LLM server unavailable or misconfigured: {exc}]"
 
+def previous_agent_asked_question(transcript: List[Dict[str, Any]]) -> bool:
+    for turn in reversed(transcript or []):
+        if str(turn.get("speaker", "")).lower() == "agent":
+            return "?" in str(turn.get("text", ""))
+    return False
+
+
 def make_opening(pid, assignment):
     ctx = personality_context(pid) if assignment["personality_context_enabled"] else ""
-    messages = [{"role":"system","content":system_prompt(STYLE_PROMPTS[assignment["style_name"]], ctx)}, {"role":"user","content":"Start a natural short mobile-style conversation based on this scenario. Do not sound like a questionnaire. Ask at most one question.\nScenario: " + assignment["topic_prompt"]}]
+    messages = [
+        {"role": "system", "content": system_prompt(STYLE_PROMPTS[assignment["style_name"]], ctx)},
+        {
+            "role": "user",
+            "content": (
+                "Start a smooth casual mobile chat inspired by this scenario. "
+                "Do not summarize or describe the scenario. Do not sound like a questionnaire. "
+                "Open with a natural small comment and at most one easy question.\n"
+                "Scenario: " + assignment["topic_prompt"]
+            ),
+        },
+    ]
     return call_llm(assignment["model_name"], messages)
+
 
 def make_reply(pid, assignment, transcript):
     ctx = personality_context(pid) if assignment["personality_context_enabled"] else ""
-    messages = [{"role":"system","content":system_prompt(STYLE_PROMPTS[assignment["style_name"]], ctx)}, {"role":"user","content":"Scenario: " + assignment["topic_prompt"] + "\nContinue naturally as Alex."}]
+    no_question = previous_agent_asked_question(transcript)
+    instruction = (
+        "Continue naturally as Alex. Stay strictly on the scenario. "
+        "Respond to the participant's latest message, not to the prompt wording. "
+        "Do not offer links, checking, booking, or fictional plans. "
+        "Keep it casual mobile texting, minimal punctuation, no markdown."
+    )
+    if no_question:
+        instruction += " The previous Alex message already asked a question, so do not ask a question now."
+
+    messages = [
+        {"role": "system", "content": system_prompt(STYLE_PROMPTS[assignment["style_name"]], ctx)},
+        {"role": "user", "content": "Scenario context only, do not restate it: " + assignment["topic_prompt"] + "\n" + instruction},
+    ]
     for t in transcript[-12:]:
-        messages.append({"role":"user" if t["speaker"] == "Human" else "assistant", "content": t["text"]})
+        messages.append({"role": "user" if t["speaker"] == "Human" else "assistant", "content": t["text"]})
     return call_llm(assignment["model_name"], messages)
 
 def researcher_token():

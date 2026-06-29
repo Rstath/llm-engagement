@@ -1341,7 +1341,38 @@ def overview():
 @app.get("/api/researcher/metrics", dependencies=[Depends(require_researcher)])
 def researcher_metrics():
     init_db()
-    compute_all_completed_metrics()
+
+    try:
+        compute_all_completed_metrics()
+    except Exception as e:
+        return {
+            "summary": {
+                "embedding_model": "metrics-error",
+                "total_scored_conversations": 0,
+                "avg_engagement_score": 0,
+                "avg_coherence": 0,
+                "avg_windowed_coherence": 0,
+                "avg_topic_consistency": 0,
+                "avg_novelty": 0,
+                "avg_turn_balance": 0,
+                "avg_token_balance": 0,
+                "avg_question_rate": 0,
+                "error": str(e),
+            },
+            "sessions": [],
+            "turn_metrics": [],
+            "charts": {
+                "engagement_by_model": [],
+                "engagement_by_context": [],
+                "engagement_by_topic": [],
+                "coherence_by_model": [],
+                "topic_consistency_by_topic": [],
+                "question_rate_by_model": [],
+                "token_balance_by_model": [],
+                "conversations_by_topic": [],
+            },
+        }
+
     with connect() as conn:
         rows = [dict(r) for r in conn.execute("""
             SELECT * FROM conversation_session_metrics

@@ -1286,15 +1286,6 @@ body[data-step="chat"] .card {
 }
 
 /* Consent document preview */
-.preview-document.consent-document {
-  max-width: 860px;
-  margin: 0 auto 24px;
-  padding: clamp(18px, 4vw, 34px);
-  border: 1px solid var(--line);
-  border-radius: 22px;
-  background: rgba(255,255,255,.48);
-  line-height: 1.58;
-}
 .preview-document.consent-document h1 {
   margin: 0 0 18px;
   font-size: clamp(26px, 4vw, 38px);

@@ -381,14 +381,15 @@ def topic_preference_label(pid: str, topic_id: str) -> str:
 
 
 def generate_conversation_assignments(pid: str, reset_existing: bool = False):
-    """Create the 16-condition randomized schedule for one participant.
+    """Create conversation assignments for one participant.
 
-    Design respected:
-    - 4 participant-selected topics = 2 most + 2 least interesting
-    - 2 LLM sizes = small, medium
-    - 2 personality-context settings = false, true
-    - 4 topics × 2 sizes × 2 context = 16 conversations
-    - each topic uses 2 equivalent scenario variants, balanced across its 4 conditions
+    TEST MODE:
+    - Creates only 1 conversation so you can quickly reach the post-questionnaire
+      and thank-you page.
+    - Uses the first "most interesting" selected topic.
+    - Uses medium model with personality context enabled.
+
+    For the real study, restore the full 16-condition assignment logic.
     """
     selected_topics = selected_experiment_topics(pid)
 
@@ -411,26 +412,37 @@ def generate_conversation_assignments(pid: str, reset_existing: bool = False):
             conn.execute("DELETE FROM experiment_sessions WHERE participant_id=?", (pid,))
 
         rows = []
-        for topic_id in selected_topics:
-            variations = shuffled_for_participant(pid, f"{topic_id}:variants", list(TOPICS[topic_id]["variations"].keys()))[:2]
-            combos = [("small", False), ("small", True), ("medium", False), ("medium", True)]
-            combos = shuffled_for_participant(pid, f"{topic_id}:model-context", combos)
-            # Use exactly two equivalent scenario variants per topic, each appearing twice.
-            variant_slots = shuffled_for_participant(pid, f"{topic_id}:variant-slots", [variations[0], variations[0], variations[1], variations[1]])
-            for idx, (model_size, personality_enabled) in enumerate(combos):
-                variation_id = variant_slots[idx]
-                rows.append({
-                    "topic_id": topic_id,
-                    "variation_id": variation_id,
-                    "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
-                    "topic_preference": topic_preference_label(pid, topic_id),
-                    "style_name": stable_choice(f"{pid}:{topic_id}:{idx}:style", list(STYLE_PROMPTS.keys())),
-                    "model_size": model_size,
-                    "model_name": MEDIUM_LLM_MODEL if model_size == "medium" else SMALL_LLM_MODEL,
-                    "personality_context_enabled": personality_enabled,
-                })
 
-        rows = shuffled_for_participant(pid, "conversation-order", rows)
+        # ---------- TEST MODE ----------
+        # Only ONE conversation is generated so you can quickly test:
+        # conversation -> post-experiment questionnaire -> thank-you page.
+        #
+        # It uses the participant's first "most interesting" selected topic.
+        # Condition: medium model + personality context enabled.
+        # For the real study, restore the full 16-condition block.
+        prog = get_progress(pid)
+        topic_id = (prog.get("most_topics") or selected_topics)[0]
+
+        variation_id = stable_choice(
+            f"{pid}:{topic_id}:single-test-variant",
+            list(TOPICS[topic_id]["variations"].keys()),
+        )
+
+        rows.append({
+            "topic_id": topic_id,
+            "variation_id": variation_id,
+            "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
+            "topic_preference": topic_preference_label(pid, topic_id),
+            "style_name": stable_choice(
+                f"{pid}:{topic_id}:single-test-style",
+                list(STYLE_PROMPTS.keys()),
+            ),
+            "model_size": "medium",
+            "model_name": MEDIUM_LLM_MODEL,
+            "personality_context_enabled": True,
+        })
+
+        # No shuffle needed because there is only one test conversation.
         for order, row in enumerate(rows, start=1):
             conn.execute(
                 """

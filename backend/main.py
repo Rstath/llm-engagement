@@ -97,7 +97,8 @@ def init_db():
             big5_answers_json TEXT NOT NULL DEFAULT '{}',
             big5_scores_json TEXT NOT NULL DEFAULT '{}',
             most_topics_json TEXT NOT NULL DEFAULT '[]',
-            least_topics_json TEXT NOT NULL DEFAULT '[]'
+            least_topics_json TEXT NOT NULL DEFAULT '[]',
+            post_json TEXT NOT NULL DEFAULT '{}'
         );
 
         -- Anonymous participant login codes. Create these from the researcher dashboard/API
@@ -203,6 +204,10 @@ def init_db():
         cols = [r[1] for r in conn.execute("PRAGMA table_info(conversation_turns)").fetchall()]
         if "session_id" not in cols:
             conn.execute("ALTER TABLE conversation_turns ADD COLUMN session_id TEXT")
+
+        progress_cols = [r[1] for r in conn.execute("PRAGMA table_info(progress)").fetchall()]
+        if "post_json" not in progress_cols:
+            conn.execute("ALTER TABLE progress ADD COLUMN post_json TEXT NOT NULL DEFAULT '{}'")
         conn.commit()
 
 def jdump(v): return json.dumps(v, ensure_ascii=False)
@@ -211,7 +216,15 @@ def jload(v, default):
     except Exception: return default
 
 def row_to_progress(row):
-    return {"consent":jload(row["consent_json"],{}),"pre":jload(row["pre_json"],{}),"big5_answers":jload(row["big5_answers_json"],{}),"big5_scores":jload(row["big5_scores_json"],{}),"most_topics":jload(row["most_topics_json"],[]),"least_topics":jload(row["least_topics_json"],[])}
+    return {
+        "consent": jload(row["consent_json"], {}),
+        "pre": jload(row["pre_json"], {}),
+        "big5_answers": jload(row["big5_answers_json"], {}),
+        "big5_scores": jload(row["big5_scores_json"], {}),
+        "most_topics": jload(row["most_topics_json"], []),
+        "least_topics": jload(row["least_topics_json"], []),
+        "post": jload(row["post_json"] if "post_json" in row.keys() else "{}", {}),
+    }
 
 def get_or_create_participant(participant_id: Optional[str] = None):
     init_db()
@@ -1079,6 +1092,7 @@ class PreIn(BaseModel): participant_id: str; answers: Dict[str, Any]
 class Big5In(BaseModel): participant_id: str; answers: Dict[str, int]
 class TopicsIn(BaseModel): participant_id: str; most_topics: List[str]; least_topics: List[str]
 class ChatIn(BaseModel): participant_id: str; text: str
+class PostQuestionnaireIn(BaseModel): participant_id: str; answers: Dict[str, Any]
 class LoginIn(BaseModel): password: str
 class ParticipantLoginIn(BaseModel): access_code: str
 class AccessCodeBatchIn(BaseModel): count: int = 1
@@ -1169,8 +1183,9 @@ def chat(participant_id: str):
     assignment = ensure_assignment(participant_id)
     counts = count_assignments(participant_id)
     if not assignment:
-        set_step(participant_id, "done", completed=1)
-        return {"done": True, "all_done": True, "transcript": [], "turns": 0, "target_total_turns": TARGET_TOTAL_TURNS, "assignment_counts": counts}
+        # All conversations are finished. The next required step is the single post-experiment questionnaire.
+        set_step(participant_id, "post", completed=0)
+        return {"done": True, "all_done": True, "needs_post": True, "transcript": [], "turns": 0, "target_total_turns": TARGET_TOTAL_TURNS, "assignment_counts": counts}
 
     transcript = load_transcript(participant_id, assignment["session_id"])
     if not transcript:
@@ -1211,8 +1226,8 @@ def chat_send(data: ChatIn):
 
     assignment = ensure_assignment(data.participant_id)
     if not assignment:
-        set_step(data.participant_id, "done", completed=1)
-        return {"done": True, "all_done": True, "transcript": []}
+        set_step(data.participant_id, "post", completed=0)
+        return {"done": True, "all_done": True, "needs_post": True, "transcript": []}
 
     session_id = assignment["session_id"]
     save_turn(data.participant_id, "Human", text, session_id)
@@ -1224,8 +1239,8 @@ def chat_send(data: ChatIn):
         counts = count_assignments(data.participant_id)
         all_done = counts["remaining"] == 0
         if all_done:
-            set_step(data.participant_id, "done", completed=1)
-        return {"done": True, "all_done": all_done, "transcript": transcript, "assignment_counts": counts}
+            set_step(data.participant_id, "post", completed=0)
+        return {"done": True, "all_done": all_done, "needs_post": all_done, "transcript": transcript, "assignment_counts": counts}
 
     reply = make_reply(data.participant_id, assignment, transcript)
     save_turn(data.participant_id, "Agent", reply, session_id)
@@ -1238,9 +1253,9 @@ def chat_send(data: ChatIn):
     counts = count_assignments(data.participant_id)
     all_done = counts["remaining"] == 0
     if all_done and conversation_done:
-        set_step(data.participant_id, "done", completed=1)
+        set_step(data.participant_id, "post", completed=0)
 
-    return {"done": conversation_done, "all_done": all_done, "transcript": transcript, "assignment_counts": counts}
+    return {"done": conversation_done, "all_done": all_done, "needs_post": all_done and conversation_done, "transcript": transcript, "assignment_counts": counts}
 
 
 @app.post("/api/finish/{participant_id}")
@@ -1263,11 +1278,43 @@ def finish(participant_id: str):
     counts = count_assignments(participant_id)
 
     if counts["remaining"] <= 0:
-        set_step(participant_id, "done", completed=1)
+        set_step(participant_id, "post", completed=0)
     else:
         set_step(participant_id, "chat", completed=0)
 
     return get_progress(participant_id)
+
+
+@app.post("/api/post")
+def post_questionnaire(data: PostQuestionnaireIn):
+    required = [
+        "engagement", "naturalness", "responsiveness", "coherence",
+        "topic_consistency", "willingness_continue", "overall_satisfaction",
+    ]
+    missing = [key for key in required if data.answers.get(key) in (None, "")]
+    if missing:
+        raise HTTPException(400, "Please complete all required post-experiment questions.")
+
+    clean_answers = dict(data.answers)
+    for key in required:
+        try:
+            value = int(clean_answers[key])
+        except Exception:
+            raise HTTPException(400, "Post-experiment ratings must be numbers from 1 to 5.")
+        if value < 1 or value > 5:
+            raise HTTPException(400, "Post-experiment ratings must be numbers from 1 to 5.")
+        clean_answers[key] = value
+
+    clean_answers["submitted_at"] = now()
+    with connect() as conn:
+        conn.execute(
+            "UPDATE progress SET post_json=? WHERE participant_id=?",
+            (jdump(clean_answers), data.participant_id),
+        )
+        conn.commit()
+
+    set_step(data.participant_id, "done", completed=1)
+    return get_progress(data.participant_id)
 
 @app.post("/api/researcher/login")
 def researcher_login(data: LoginIn):
@@ -1349,7 +1396,7 @@ def export_csv():
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow([
-        "participant_id", "access_code", "participant_created_at", "current_step", "completed",
+        "participant_id", "access_code", "participant_created_at", "current_step", "completed", "post_json",
         "session_id", "conversation_order", "assignment_status", "topic_id", "variation_id",
         "topic_preference", "model_size", "model_name", "personality_context_enabled",
         "style_name", "speaker", "text", "timestamp",
@@ -1361,7 +1408,7 @@ def export_csv():
     with connect() as conn:
         rows = conn.execute("""
             SELECT
-                p.participant_id, ac.access_code, p.created_at AS participant_created_at, p.current_step, p.completed,
+                p.participant_id, ac.access_code, p.created_at AS participant_created_at, p.current_step, p.completed, pr.post_json,
                 a.session_id, a.conversation_order, a.status AS assignment_status, a.topic_id, a.variation_id,
                 a.topic_preference, a.model_size, a.model_name, a.personality_context_enabled, a.style_name,
                 c.speaker, c.text, c.created_at AS turn_time, c.turn_index,
@@ -1371,6 +1418,7 @@ def export_csv():
                 sm.turn_balance, sm.token_balance, sm.question_rate, sm.engagement_score
             FROM participants p
             LEFT JOIN participant_access_codes ac ON p.participant_id=ac.participant_id
+            LEFT JOIN progress pr ON p.participant_id=pr.participant_id
             LEFT JOIN conversation_assignments a ON p.participant_id=a.participant_id
             LEFT JOIN conversation_turns c ON a.session_id=c.session_id
             LEFT JOIN conversation_turn_metrics tm ON c.turn_id=tm.turn_id
@@ -1379,7 +1427,7 @@ def export_csv():
         """).fetchall()
     for r in rows:
         writer.writerow([
-            r["participant_id"], r["access_code"] or "", r["participant_created_at"], r["current_step"], r["completed"],
+            r["participant_id"], r["access_code"] or "", r["participant_created_at"], r["current_step"], r["completed"], r["post_json"] or "{}",
             r["session_id"] or "", r["conversation_order"] or "", r["assignment_status"] or "", r["topic_id"] or "", r["variation_id"] or "",
             r["topic_preference"] or "", r["model_size"] or "", r["model_name"] or "", r["personality_context_enabled"] if r["personality_context_enabled"] is not None else "",
             r["style_name"] or "", r["speaker"] or "", r["text"] or "", r["turn_time"] or "",

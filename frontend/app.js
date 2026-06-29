@@ -208,7 +208,7 @@ function detectDevice() {
 }
 function isDesktopDevice() { return state.device === 'desktop' && window.matchMedia('(min-width: 1025px)').matches; }
 function stepLabel(step) {
-  return ({ consent: 'the consent form', pre: 'the pre-experiment questionnaire', big5: 'the Big Five Inventory', topics: 'topic selection', topic_preferences: 'topic selection', chat: 'the conversation', done: 'the thank-you page' })[step] || 'where you left off';
+  return ({ consent: 'the consent form', pre: 'the pre-experiment questionnaire', big5: 'the Big Five Inventory', topics: 'topic selection', topic_preferences: 'topic selection', chat: 'the conversation', post: 'the post-experiment questionnaire', done: 'the thank-you page' })[step] || 'where you left off';
 }
 function hasSavedProgress(progress) {
   const step = progress?.current_step || 'consent';
@@ -404,7 +404,8 @@ function openInfoModal() {
     <div class="modal-body">
       <p>If you experience discomfort, distress, or any problem during the study, you may stop participating at any time by closing the browser window.</p>
       <p>You may contact the researcher at any time if something bad occurs during or after participation.</p>
-      <p><strong>Researcher</strong><br>Roubini Stathopoulou<br><a href="mailto:rstathopoulou76@gmail.com">rstathopoulou76@gmail.com</a></p>
+      <p><strong>Researcher</strong><br>Roumpini Stathopoulou<br><a href="mailto:st1059667@ceid.upatras.gr">st1059667@ceid.upatras.gr</a></p>
+      <p><strong>Supervisor</strong><br>Mr. Andreas Komninos<br><a href="mailto:akomninos@ceid.upatras.gr">akomninos@ceid.upatras.gr</a></p>
     </div>
     <div class="modal-footer"><button type="button" class="resume-continue">Close</button></div>
   </div></div>`;
@@ -605,6 +606,7 @@ function route() {
   if (step === 'big5') return finishRoute(renderBig5);
   if (step === 'topics' || step === 'topic_preferences') return finishRoute(renderTopicsMost);
   if (step === 'chat') return finishRoute(renderChat);
+  if (step === 'post') return finishRoute(renderPostQuestionnaire);
   return finishRoute(renderDone);
 }
 
@@ -821,11 +823,11 @@ async function renderChat(err = '') {
   try { data = await api(`/api/chat/${state.participant}`); } catch(e) { app.innerHTML = errorBox(e); return; }
 
   if (data.done) {
-    setProgress(await api(`/api/session`, {
+    const progress = await api(`/api/session`, {
       method: 'POST',
       body: JSON.stringify({ participant_id: state.participant })
-    }));
-    renderDone();
+    });
+    renderProgressFromServer(progress);
     return;
   }
 
@@ -971,24 +973,26 @@ async function renderChat(err = '') {
         const formEl = document.getElementById('chatForm');
         if (formEl) formEl.outerHTML = `<p class="muted chat-complete">Conversation complete.</p>`;
 
-        if (!result.all_done && !document.getElementById('finish')) {
-          app.insertAdjacentHTML('beforeend', actions('<button id="finish">Next conversation</button>'));
+        if (!document.getElementById('finish')) {
+          const label = result.all_done ? 'Go to questionnaire' : 'Next conversation';
+          app.insertAdjacentHTML('beforeend', actions(`<button id="finish">${label}</button>`));
         }
 
         const finishBtn = document.getElementById('finish');
         if (finishBtn) {
+          finishBtn.textContent = result.all_done ? 'Go to questionnaire' : 'Next conversation';
           finishBtn.onclick = async () => {
-            const progress = await api(`/api/finish/${state.participant}`, { method: 'POST' });
-            renderProgressFromServer(progress);
+            if (result.all_done) {
+              const progress = await api(`/api/session`, {
+                method: 'POST',
+                body: JSON.stringify({ participant_id: state.participant })
+              });
+              renderProgressFromServer(progress);
+            } else {
+              const progress = await api(`/api/finish/${state.participant}`, { method: 'POST' });
+              renderProgressFromServer(progress);
+            }
           };
-        }
-
-        if (result.all_done) {
-          setProgress(await api(`/api/session`, {
-            method: 'POST',
-            body: JSON.stringify({ participant_id: state.participant })
-          }));
-          renderDone();
         }
       } else {
         textEl.disabled = false;
@@ -1074,17 +1078,122 @@ async function renderChat(err = '') {
 
   const finish = document.getElementById('finish');
   if (finish) {
+    const isLastConversation = Boolean(data.all_done || data.assignment_counts?.remaining === 0 || data.assignment?.remaining_conversations === 0);
+    finish.textContent = isLastConversation ? 'Go to questionnaire' : 'Next conversation';
     finish.onclick = async () => {
-      const progress = await api(`/api/finish/${state.participant}`, { method: 'POST' });
-      renderProgressFromServer(progress);
+      if (isLastConversation) {
+        const progress = await api(`/api/session`, {
+          method: 'POST',
+          body: JSON.stringify({ participant_id: state.participant })
+        });
+        renderProgressFromServer(progress);
+      } else {
+        const progress = await api(`/api/finish/${state.participant}`, { method: 'POST' });
+        renderProgressFromServer(progress);
+      }
     };
   }
+}
+
+
+function likertRow(name, label, selected = '', errors = {}) {
+  return `<div class="section compact post-item">
+    <strong>${htmlEscape(label)} *</strong>
+    ${radioGroup(name, ['1', '2', '3', '4', '5'], String(selected || ''), true)}
+    <p class="muted post-scale">1 = strongly disagree · 5 = strongly agree</p>
+    ${fieldError(errors, name)}
+  </div>`;
+}
+
+function collectPostQuestionnaire() {
+  return {
+    engagement: getRadio('post_engagement'),
+    naturalness: getRadio('post_naturalness'),
+    responsiveness: getRadio('post_responsiveness'),
+    coherence: getRadio('post_coherence'),
+    topic_consistency: getRadio('post_topic_consistency'),
+    willingness_continue: getRadio('post_willingness_continue'),
+    overall_satisfaction: getRadio('post_overall_satisfaction'),
+    emotions: [...document.querySelectorAll('input[name="post_emotion"]:checked')].map(x => x.value),
+    comments: document.getElementById('post_comments')?.value.trim() || ''
+  };
+}
+
+function validatePostQuestionnaire(answers) {
+  const errors = {};
+  const required = {
+    post_engagement: answers.engagement,
+    post_naturalness: answers.naturalness,
+    post_responsiveness: answers.responsiveness,
+    post_coherence: answers.coherence,
+    post_topic_consistency: answers.topic_consistency,
+    post_willingness_continue: answers.willingness_continue,
+    post_overall_satisfaction: answers.overall_satisfaction,
+  };
+  for (const [key, value] of Object.entries(required)) {
+    if (!value) errors[key] = 'This question is required.';
+  }
+  return errors;
+}
+
+function renderPostQuestionnaire(errors = {}) {
+  document.body.dataset.step = 'post';
+  const saved = state.progress?.post || {};
+  const selectedEmotions = saved.emotions || [];
+  const emotionOptions = ['Interested', 'Engaged', 'Curious', 'Comfortable', 'Neutral', 'Confused', 'Bored', 'Frustrated'];
+
+  app.innerHTML = `<h2>Post-experiment questionnaire</h2>
+    <p class="muted">You have completed all conversations. Please answer these final questions about the overall experience.</p>
+
+    ${likertRow('post_engagement', 'The conversations were engaging.', saved.engagement, errors)}
+    ${likertRow('post_naturalness', 'The AI messages felt natural.', saved.naturalness, errors)}
+    ${likertRow('post_responsiveness', 'The AI responded appropriately to what I wrote.', saved.responsiveness, errors)}
+    ${likertRow('post_coherence', 'The conversations flowed coherently.', saved.coherence, errors)}
+    ${likertRow('post_topic_consistency', 'The conversations stayed on topic.', saved.topic_consistency, errors)}
+    ${likertRow('post_willingness_continue', 'I would be willing to continue chatting with this AI.', saved.willingness_continue, errors)}
+    ${likertRow('post_overall_satisfaction', 'Overall, I was satisfied with the interaction experience.', saved.overall_satisfaction, errors)}
+
+    <div class="section compact post-item">
+      <strong>How did you feel during the conversations?</strong>
+      <p class="muted">Select any that apply.</p>
+      <div class="checkbox-grid">
+        ${emotionOptions.map(emotion => `<label><input type="checkbox" name="post_emotion" value="${htmlEscape(emotion)}" ${selectedEmotions.includes(emotion) ? 'checked' : ''}> ${htmlEscape(emotion)}</label>`).join('')}
+      </div>
+    </div>
+
+    <div class="section compact post-item">
+      <label><strong>Anything else you would like to add?</strong>
+        <textarea id="post_comments" rows="5" placeholder="Optional comment">${htmlEscape(saved.comments || '')}</textarea>
+      </label>
+    </div>
+
+    ${errors.form ? errorBox(errors.form) : ''}
+  ` + actions('<button id="completeExperiment">Complete experiment</button>');
+
+  const btn = document.getElementById('completeExperiment');
+  btn.onclick = async () => {
+    const answers = collectPostQuestionnaire();
+    const validation = validatePostQuestionnaire(answers);
+    if (Object.keys(validation).length) {
+      return renderPostQuestionnaire(validation);
+    }
+
+    try {
+      const progress = await api('/api/post', {
+        method: 'POST',
+        body: JSON.stringify({ participant_id: state.participant, answers })
+      });
+      renderProgressFromServer(progress);
+    } catch (e) {
+      renderPostQuestionnaire({ form: e.message || String(e) });
+    }
+  };
 }
 
 function renderDone() {
   if (participantLabel) participantLabel.textContent = state.participant ? `Participant: ${state.participant}` : '';
   renderParticipantLogoutButton();
-  app.innerHTML = `<div class="thank-you"><div class="thank-you-check">✓</div><h2>Thank you!</h2><p>Your responses have been submitted successfully.</p></div>`;
+  app.innerHTML = `<div class="thank-you"><div class="thank-you-check">✓</div><h2>Thank you!</h2><p>Your experiment is complete. Your conversations and questionnaire responses have been submitted successfully.</p></div>`;
 }
 
 function pct(value) {

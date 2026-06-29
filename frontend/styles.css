@@ -1256,3 +1256,31 @@ body[data-step="chat"] .card {
     background: rgba(27,69,79,.92);
   }
 }
+
+
+/* Post-experiment questionnaire */
+.post-item .radio-group.horizontal {
+  margin-top: 10px;
+}
+.post-scale {
+  margin: 8px 0 0;
+  font-size: .9rem;
+}
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+  margin-top: 10px;
+}
+.checkbox-grid label {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255,255,255,.35);
+}
+@media (max-width: 720px) {
+  .checkbox-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -208,7 +208,7 @@ function detectDevice() {
 }
 function isDesktopDevice() { return state.device === 'desktop' && window.matchMedia('(min-width: 1025px)').matches; }
 function stepLabel(step) {
-  return ({ consent: 'the consent form', pre: 'the pre-experiment questionnaire', big5: 'the Big Five Inventory', topics: 'topic selection', topic_preferences: 'topic selection', chat: 'the conversation', post: 'the post-experiment questionnaire', done: 'the thank-you page' })[step] || 'where you left off';
+  return ({ consent: 'the consent form', instructions: 'the study instructions', pre: 'the pre-experiment questionnaire', big5: 'the Big Five Inventory', topics: 'topic selection', topic_preferences: 'topic selection', chat: 'the conversation', post: 'the post-experiment questionnaire', done: 'the thank-you page' })[step] || 'where you left off';
 }
 function hasSavedProgress(progress) {
   const step = progress?.current_step || 'consent';
@@ -602,6 +602,7 @@ function route() {
   const step = state.progress.current_step || 'consent';
   document.body.dataset.step = step;
   if (step === 'consent') return finishRoute(renderConsent);
+  if (step === 'instructions') return finishRoute(renderInstructions);
   if (step === 'pre') return finishRoute(renderPre);
   if (step === 'big5') return finishRoute(renderBig5);
   if (step === 'topics' || step === 'topic_preferences') return finishRoute(renderTopicsMost);
@@ -701,6 +702,74 @@ function renderConsent() {
     };
     try { setProgress(await api('/api/consent', { method: 'POST', body: JSON.stringify(payload) })); route(); }
     catch (e) { app.insertAdjacentHTML('beforeend', errorBox(e)); }
+  };
+}
+
+
+function renderInstructions() {
+  document.body.dataset.step = 'instructions';
+  app.innerHTML = `<div class="instructions-page">
+    <p class="step-eyebrow">Step 2 of 8 — Instructions</p>
+    <h2>Instructions</h2>
+    <p>Thank you for agreeing to participate in this study.</p>
+    <p>Before you begin, please read the following information carefully.</p>
+
+    <div class="instruction-grid">
+      <section class="instruction-card">
+        <h3>What you will do</h3>
+        <ul>
+          <li>Complete a few short questionnaires.</li>
+          <li>Select conversation topics based on your preferences.</li>
+          <li>Participate in one or more mobile-style text conversations with an AI conversational partner.</li>
+          <li>Complete a short questionnaire after the conversation(s).</li>
+        </ul>
+        <p class="muted">The study takes approximately 45–60 minutes in total.</p>
+      </section>
+
+      <section class="instruction-card">
+        <h3>During the conversations</h3>
+        <ul>
+          <li>Please communicate as naturally as you would in your everyday messaging applications.</li>
+          <li>There are no right or wrong answers.</li>
+          <li>Respond naturally and honestly.</li>
+          <li>You may write short or long messages.</li>
+          <li>You may send multiple consecutive messages if that feels natural.</li>
+          <li>You do not need to use perfect grammar or punctuation.</li>
+        </ul>
+      </section>
+
+      <section class="instruction-card highlight">
+        <h3>Completing the study</h3>
+        <p>You have <strong>up to two weeks</strong> from receiving your participant code to complete the study.</p>
+        <p>Your progress is saved automatically after each step.</p>
+        <ul>
+          <li>You may leave the study at any time.</li>
+          <li>You can return later using the participant code/password sent to you by email.</li>
+          <li>You will continue from where you left off.</li>
+          <li>Please complete the study within two weeks.</li>
+        </ul>
+      </section>
+
+      <section class="instruction-card">
+        <h3>Privacy</h3>
+        <p>Your responses are stored using your anonymous participant code.</p>
+        <p>No personally identifying information will appear in the research results.</p>
+      </section>
+    </div>
+
+    <div class="instruction-tip">
+      <strong>Tip</strong>
+      <p>If you are using a mobile phone, keeping the browser open will provide the best experience. If you need to leave, your progress will be saved automatically and you can continue later using your participant code.</p>
+    </div>
+  </div>` + actions('<button id="startStudy">Start Study</button>');
+
+  document.getElementById('startStudy').onclick = async () => {
+    try {
+      setProgress(await api(`/api/instructions/${encodeURIComponent(state.participant)}`, { method: 'POST' }));
+      route();
+    } catch (e) {
+      app.insertAdjacentHTML('beforeend', errorBox(e));
+    }
   };
 }
 

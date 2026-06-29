@@ -1397,8 +1397,13 @@ def consent(data: ConsentIn):
         raise HTTPException(400, "Consent is incomplete")
     with connect() as conn:
         conn.execute("UPDATE progress SET consent_json=? WHERE participant_id=?", (jdump(data.model_dump(exclude={"participant_id"})), data.participant_id)); conn.commit()
-    set_step(data.participant_id, "pre")
+    set_step(data.participant_id, "instructions")
     return get_progress(data.participant_id)
+
+@app.post("/api/instructions/{participant_id}")
+def instructions_acknowledged(participant_id: str):
+    set_step(participant_id, "pre")
+    return get_progress(participant_id)
 
 @app.post("/api/pre")
 def pre(data: PreIn):

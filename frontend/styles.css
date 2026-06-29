@@ -1329,3 +1329,55 @@ body[data-step="chat"] .card {
     grid-template-columns: 1fr;
   }
 }
+
+
+/* Study instructions page */
+.step-eyebrow {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+.instructions-page > p {
+  max-width: 760px;
+}
+.instruction-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 20px;
+}
+.instruction-card {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 18px;
+  background: rgba(255,255,255,.42);
+}
+.instruction-card h3 {
+  margin-bottom: 10px;
+}
+.instruction-card ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+.instruction-card li {
+  margin: 8px 0;
+}
+.instruction-card.highlight {
+  background: var(--soft);
+}
+.instruction-tip {
+  margin-top: 18px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,.55);
+}
+.instruction-tip p {
+  margin-bottom: 0;
+}
+@media (max-width: 760px) {
+  .instruction-grid {
+    grid-template-columns: 1fr;
+  }
+}

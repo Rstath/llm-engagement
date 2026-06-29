@@ -1089,6 +1089,264 @@ def group_count(rows, group_key: str) -> List[Dict[str, Any]]:
         counts[str(r[group_key])] = counts.get(str(r[group_key]), 0) + 1
     return [{'label': k, 'value': v} for k, v in sorted(counts.items())]
 
+
+# ---------------- Research dashboard statistics ----------------
+def percentile(values: List[float], p: float) -> float:
+    vals = sorted(float(v) for v in values if v is not None)
+    if not vals:
+        return 0.0
+    if len(vals) == 1:
+        return round(vals[0], 4)
+    k = (len(vals) - 1) * p
+    lo = int(math.floor(k))
+    hi = int(math.ceil(k))
+    if lo == hi:
+        return round(vals[lo], 4)
+    return round(vals[lo] * (hi - k) + vals[hi] * (k - lo), 4)
+
+
+def descriptive_stats(values: List[float]) -> Dict[str, Any]:
+    vals = [float(v) for v in values if v is not None]
+    n = len(vals)
+    if not vals:
+        return {"n": 0, "mean": 0, "median": 0, "sd": 0, "min": 0, "max": 0, "q1": 0, "q3": 0, "ci95_low": 0, "ci95_high": 0}
+    mean = sum(vals) / n
+    sd = math.sqrt(sum((x - mean) ** 2 for x in vals) / max(1, n - 1)) if n > 1 else 0.0
+    se = sd / math.sqrt(n) if n > 1 else 0.0
+    return {
+        "n": n,
+        "mean": round(mean, 4),
+        "median": percentile(vals, 0.5),
+        "sd": round(sd, 4),
+        "min": round(min(vals), 4),
+        "max": round(max(vals), 4),
+        "q1": percentile(vals, 0.25),
+        "q3": percentile(vals, 0.75),
+        "ci95_low": round(mean - 1.96 * se, 4),
+        "ci95_high": round(mean + 1.96 * se, 4),
+    }
+
+
+def norm_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(float(x) / math.sqrt(2.0)))
+
+
+def chi_square_sf_approx(x: float, df: int) -> float:
+    if df <= 0:
+        return 1.0
+    if x <= 0:
+        return 1.0
+    # Wilson-Hilferty transformation approximation.
+    z = ((x / df) ** (1 / 3) - (1 - 2 / (9 * df))) / math.sqrt(2 / (9 * df))
+    return round(max(0.0, min(1.0, 1.0 - norm_cdf(z))), 6)
+
+
+def rank_values(values: List[float]) -> List[float]:
+    indexed = sorted((float(v), i) for i, v in enumerate(values))
+    ranks = [0.0] * len(values)
+    pos = 0
+    while pos < len(indexed):
+        end = pos
+        while end + 1 < len(indexed) and indexed[end + 1][0] == indexed[pos][0]:
+            end += 1
+        rank = (pos + 1 + end + 1) / 2.0
+        for j in range(pos, end + 1):
+            ranks[indexed[j][1]] = rank
+        pos = end + 1
+    return ranks
+
+
+def pearson_corr(x: List[float], y: List[float]) -> float:
+    n = min(len(x), len(y))
+    if n < 2:
+        return 0.0
+    xs = [float(v) for v in x[:n]]
+    ys = [float(v) for v in y[:n]]
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    num = sum((xs[i] - mx) * (ys[i] - my) for i in range(n))
+    denx = math.sqrt(sum((v - mx) ** 2 for v in xs))
+    deny = math.sqrt(sum((v - my) ** 2 for v in ys))
+    return 0.0 if not denx or not deny else num / (denx * deny)
+
+
+def spearman_corr(x: List[float], y: List[float]) -> Dict[str, Any]:
+    n = min(len(x), len(y))
+    if n < 4:
+        return {"n": n, "rho": 0, "p": None, "note": "need at least 4 paired observations"}
+    rho = pearson_corr(rank_values(x[:n]), rank_values(y[:n]))
+    # Normal approximation for Spearman via t approximation, then normal fallback.
+    t = rho * math.sqrt((n - 2) / max(1e-12, 1 - rho * rho))
+    # p approximate using normal when scipy is unavailable.
+    p = 2 * (1 - norm_cdf(abs(t)))
+    return {"n": n, "rho": round(rho, 4), "p": round(max(0.0, min(1.0, p)), 6)}
+
+
+def wilcoxon_signed_rank(x: List[float], y: List[float]) -> Dict[str, Any]:
+    diffs = [float(a) - float(b) for a, b in zip(x, y) if a is not None and b is not None and abs(float(a) - float(b)) > 1e-12]
+    n = len(diffs)
+    if n < 5:
+        return {"test": "Wilcoxon signed-rank", "n": n, "statistic": None, "p": None, "effect_size_r": None, "note": "need at least 5 non-zero paired differences"}
+    abs_diffs = [abs(d) for d in diffs]
+    ranks = rank_values(abs_diffs)
+    w_plus = sum(r for r, d in zip(ranks, diffs) if d > 0)
+    w_minus = sum(r for r, d in zip(ranks, diffs) if d < 0)
+    w = min(w_plus, w_minus)
+    mean = n * (n + 1) / 4.0
+    var = n * (n + 1) * (2 * n + 1) / 24.0
+    z = (w - mean) / math.sqrt(var) if var else 0.0
+    p = 2 * (1 - norm_cdf(abs(z)))
+    return {"test": "Wilcoxon signed-rank", "n": n, "statistic": round(w, 4), "p": round(max(0.0, min(1.0, p)), 6), "effect_size_r": round(abs(z) / math.sqrt(n), 4)}
+
+
+def paired_by_participant(rows: List[Dict[str, Any]], condition_key: str, a: Any, b: Any, metric_key: str) -> Dict[str, List[float]]:
+    grouped: Dict[str, Dict[str, List[float]]] = {}
+    for r in rows:
+        if r.get(metric_key) is None:
+            continue
+        pid = str(r.get("participant_id"))
+        label = str(r.get(condition_key))
+        grouped.setdefault(pid, {}).setdefault(label, []).append(float(r[metric_key]))
+    xs, ys = [], []
+    for vals in grouped.values():
+        if str(a) in vals and str(b) in vals:
+            xs.append(sum(vals[str(a)]) / len(vals[str(a)]))
+            ys.append(sum(vals[str(b)]) / len(vals[str(b)]))
+    return {"x": xs, "y": ys}
+
+
+def friedman_test_by_participant(rows: List[Dict[str, Any]], condition_key: str, metric_key: str) -> Dict[str, Any]:
+    labels = sorted({str(r.get(condition_key)) for r in rows if r.get(metric_key) is not None})
+    if len(labels) < 3:
+        return {"test": "Friedman", "n": 0, "k": len(labels), "statistic": None, "p": None, "note": "need at least 3 repeated conditions"}
+    by_pid: Dict[str, Dict[str, List[float]]] = {}
+    for r in rows:
+        if r.get(metric_key) is None:
+            continue
+        by_pid.setdefault(str(r.get("participant_id")), {}).setdefault(str(r.get(condition_key)), []).append(float(r[metric_key]))
+    complete = []
+    for vals in by_pid.values():
+        if all(label in vals for label in labels):
+            complete.append([sum(vals[label]) / len(vals[label]) for label in labels])
+    n = len(complete)
+    k = len(labels)
+    if n < 2:
+        return {"test": "Friedman", "n": n, "k": k, "statistic": None, "p": None, "note": "need at least 2 participants with all repeated conditions"}
+    rank_sums = [0.0] * k
+    for row in complete:
+        ranks = rank_values(row)
+        for i, rank in enumerate(ranks):
+            rank_sums[i] += rank
+    chi2 = (12 / (n * k * (k + 1))) * sum(rs * rs for rs in rank_sums) - 3 * n * (k + 1)
+    p = chi_square_sf_approx(chi2, k - 1)
+    return {"test": "Friedman", "n": n, "k": k, "conditions": labels, "statistic": round(chi2, 4), "p": p}
+
+
+def histogram(values: List[float], bins: int = 10, lo: float = 0.0, hi: float = 1.0) -> List[Dict[str, Any]]:
+    counts = [0] * bins
+    for v in values:
+        try:
+            x = float(v)
+        except Exception:
+            continue
+        idx = int((x - lo) / max(1e-12, hi - lo) * bins)
+        idx = max(0, min(bins - 1, idx))
+        counts[idx] += 1
+    out = []
+    for i, count in enumerate(counts):
+        start = lo + i * (hi - lo) / bins
+        end = lo + (i + 1) * (hi - lo) / bins
+        out.append({"label": f"{start:.1f}-{end:.1f}", "value": count})
+    return out
+
+
+def boxplot_groups(rows: List[Dict[str, Any]], group_key: str, metric_key: str) -> List[Dict[str, Any]]:
+    groups: Dict[str, List[float]] = {}
+    for r in rows:
+        if r.get(metric_key) is not None:
+            groups.setdefault(str(r.get(group_key)), []).append(float(r[metric_key]))
+    result = []
+    for label, vals in sorted(groups.items()):
+        st = descriptive_stats(vals)
+        result.append({"label": label, **st})
+    return result
+
+
+def grouped_metric_matrix(rows: List[Dict[str, Any]], group_key: str, metrics: List[str]) -> List[Dict[str, Any]]:
+    groups = sorted({str(r.get(group_key)) for r in rows})
+    out = []
+    for metric in metrics:
+        row = {"metric": metric}
+        for group in groups:
+            vals = [float(r[metric]) for r in rows if str(r.get(group_key)) == group and r.get(metric) is not None]
+            row[group] = round(sum(vals) / max(1, len(vals)), 4)
+        out.append(row)
+    return out
+
+
+def topic_context_heatmap(rows: List[Dict[str, Any]], metric_key: str = "engagement_score") -> List[Dict[str, Any]]:
+    topics = sorted({str(r.get("topic_id")) for r in rows})
+    out = []
+    for topic in topics:
+        row = {"topic": topic}
+        for ctx_label, ctx_value in [("no_context", 0), ("context", 1)]:
+            vals = [float(r[metric_key]) for r in rows if str(r.get("topic_id")) == topic and int(r.get("personality_context_enabled") or 0) == ctx_value and r.get(metric_key) is not None]
+            row[ctx_label] = round(sum(vals) / max(1, len(vals)), 4) if vals else None
+            row[f"{ctx_label}_n"] = len(vals)
+        out.append(row)
+    return out
+
+
+def compute_research_statistics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    metric_keys = ["engagement_score", "coherence", "windowed_coherence", "topic_consistency", "novelty", "turn_balance", "token_balance", "question_rate"]
+    descriptives = {m: descriptive_stats([r.get(m) for r in rows]) for m in metric_keys}
+
+    model_pair = paired_by_participant(rows, "model_size", "medium", "small", "engagement_score")
+    context_pair = paired_by_participant(rows, "personality_context_enabled", "1", "0", "engagement_score")
+
+    return {
+        "descriptives": descriptives,
+        "tests": {
+            "model_medium_vs_small_engagement": wilcoxon_signed_rank(model_pair["x"], model_pair["y"]),
+            "context_vs_no_context_engagement": wilcoxon_signed_rank(context_pair["x"], context_pair["y"]),
+            "topic_effect_engagement": friedman_test_by_participant(rows, "topic_id", "engagement_score"),
+        },
+        "distributions": {
+            "engagement_histogram": histogram([r.get("engagement_score") for r in rows if r.get("engagement_score") is not None]),
+            "engagement_box_by_model": boxplot_groups(rows, "model_size", "engagement_score"),
+            "engagement_box_by_context": boxplot_groups(rows, "personality_context_enabled", "engagement_score"),
+        },
+        "matrices": {
+            "model_metrics": grouped_metric_matrix(rows, "model_size", ["engagement_score", "coherence", "topic_consistency", "novelty", "question_rate"]),
+            "context_metrics": grouped_metric_matrix(rows, "personality_context_enabled", ["engagement_score", "coherence", "topic_consistency", "novelty", "question_rate"]),
+            "topic_context_heatmap": topic_context_heatmap(rows, "engagement_score"),
+        },
+    }
+
+
+def compute_big5_correlations(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    by_pid: Dict[str, List[float]] = {}
+    for r in rows:
+        if r.get("engagement_score") is not None:
+            by_pid.setdefault(str(r.get("participant_id")), []).append(float(r["engagement_score"]))
+    if not by_pid:
+        return []
+    with connect() as conn:
+        progress = [dict(r) for r in conn.execute("SELECT participant_id,big5_scores_json FROM progress").fetchall()]
+    traits = ["Extraversion", "Agreeableness", "Conscientiousness", "Neuroticism", "Openness"]
+    result = []
+    for trait in traits:
+        xs, ys = [], []
+        for p in progress:
+            pid = str(p["participant_id"])
+            scores = jload(p.get("big5_scores_json"), {})
+            if pid in by_pid and trait in scores:
+                xs.append(float(scores[trait]))
+                ys.append(sum(by_pid[pid]) / len(by_pid[pid]))
+        stat = spearman_corr(xs, ys)
+        result.append({"trait": trait, **stat})
+    return result
+
 def researcher_token():
     return hmac.new(APP_SECRET.encode(), RESEARCHER_PASSWORD.encode(), hashlib.sha256).hexdigest()
 
@@ -1354,36 +1612,11 @@ def overview():
 def researcher_metrics():
     init_db()
 
+    metrics_error = None
     try:
         compute_all_completed_metrics()
     except Exception as e:
-        return {
-            "summary": {
-                "embedding_model": "metrics-error",
-                "total_scored_conversations": 0,
-                "avg_engagement_score": 0,
-                "avg_coherence": 0,
-                "avg_windowed_coherence": 0,
-                "avg_topic_consistency": 0,
-                "avg_novelty": 0,
-                "avg_turn_balance": 0,
-                "avg_token_balance": 0,
-                "avg_question_rate": 0,
-                "error": str(e),
-            },
-            "sessions": [],
-            "turn_metrics": [],
-            "charts": {
-                "engagement_by_model": [],
-                "engagement_by_context": [],
-                "engagement_by_topic": [],
-                "coherence_by_model": [],
-                "topic_consistency_by_topic": [],
-                "question_rate_by_model": [],
-                "token_balance_by_model": [],
-                "conversations_by_topic": [],
-            },
-        }
+        metrics_error = str(e)
 
     with connect() as conn:
         rows = [dict(r) for r in conn.execute("""
@@ -1394,9 +1627,18 @@ def researcher_metrics():
             SELECT * FROM conversation_turn_metrics
             ORDER BY participant_id, session_id, turn_index ASC
         """).fetchall()]
+        participant_rows = [dict(r) for r in conn.execute("SELECT participant_id, current_step, completed FROM participants").fetchall()]
+
+    participant_count = len(participant_rows)
+    completed_participants = sum(1 for p in participant_rows if p.get("completed"))
+    expected_conversations = participant_count * max(1, len(rows) // max(1, participant_count)) if rows else participant_count
 
     summary = {
         "embedding_model": EMBEDDING_MODEL_NAME if get_embedding_model() else "hash-fallback-no-sentence-transformers",
+        "metrics_error": metrics_error,
+        "participants": participant_count,
+        "completed_participants": completed_participants,
+        "participant_completion_rate": round(completed_participants / max(1, participant_count), 4),
         "total_scored_conversations": len(rows),
         "avg_engagement_score": avg_float(rows, "engagement_score"),
         "avg_coherence": avg_float(rows, "coherence"),
@@ -1408,10 +1650,14 @@ def researcher_metrics():
         "avg_question_rate": avg_float(rows, "question_rate"),
     }
 
+    statistics = compute_research_statistics(rows)
+    statistics["big5_correlations"] = compute_big5_correlations(rows)
+
     return {
         "summary": summary,
         "sessions": rows,
         "turn_metrics": turn_rows,
+        "statistics": statistics,
         "charts": {
             "engagement_by_model": group_average(rows, "model_size", "engagement_score"),
             "engagement_by_context": group_average(rows, "personality_context_enabled", "engagement_score"),
@@ -1421,6 +1667,7 @@ def researcher_metrics():
             "question_rate_by_model": group_average(rows, "model_size", "question_rate"),
             "token_balance_by_model": group_average(rows, "model_size", "token_balance"),
             "conversations_by_topic": group_count(rows, "topic_id"),
+            "engagement_histogram": statistics["distributions"]["engagement_histogram"],
         },
     }
 

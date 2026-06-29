@@ -1261,6 +1261,14 @@ function dec(value, digits = 3) {
   return Number.isFinite(n) ? n.toFixed(digits) : '0.000';
 }
 
+function fmtP(value) {
+  if (value === null || value === undefined || value === '') return 'n/a';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 'n/a';
+  if (n < 0.001) return '< .001';
+  return n.toFixed(3);
+}
+
 function metricCard(label, value, hint = '') {
   return `<div class="metric-card">
     <div class="metric-value">${htmlEscape(value)}</div>
@@ -1281,7 +1289,7 @@ function barChart(title, rows, valueLabel = 'Average') {
       const width = Math.max(3, Math.round((value / max) * 100));
       const count = r.count ? ` · n=${r.count}` : '';
       return `<div class="bar-row">
-        <div class="bar-label">${htmlEscape(String(r.label))}</div>
+        <div class="bar-label" title="${htmlEscape(String(r.label))}">${htmlEscape(String(r.label))}</div>
         <div class="bar-track"><div class="bar-fill" style="width:${width}%"></div></div>
         <div class="bar-value">${htmlEscape(dec(value))}${htmlEscape(count)}</div>
       </div>`;
@@ -1290,8 +1298,65 @@ function barChart(title, rows, valueLabel = 'Average') {
   </div>`;
 }
 
+function histogramChart(title, rows) {
+  return barChart(title, rows, 'Distribution of engagement scores');
+}
+
+function groupedMetricTable(title, rows) {
+  const clean = rows || [];
+  if (!clean.length) return `<div class="metric-chart"><h3>${htmlEscape(title)}</h3><p class="muted">Not enough data yet.</p></div>`;
+  const groupKeys = Object.keys(clean[0]).filter(k => k !== 'metric');
+  return `<div class="metric-chart wide"><h3>${htmlEscape(title)}</h3>
+    <div class="table-wrap"><table class="compact-table"><thead><tr><th>Metric</th>${groupKeys.map(k => `<th>${htmlEscape(k === '1' ? 'Context' : k === '0' ? 'No context' : k)}</th>`).join('')}</tr></thead>
+    <tbody>${clean.map(row => `<tr><td>${htmlEscape(row.metric)}</td>${groupKeys.map(k => `<td>${htmlEscape(dec(row[k]))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+  </div>`;
+}
+
+function boxPlotTable(title, rows) {
+  const clean = rows || [];
+  if (!clean.length) return `<div class="metric-chart"><h3>${htmlEscape(title)}</h3><p class="muted">Not enough data yet.</p></div>`;
+  return `<div class="metric-chart"><h3>${htmlEscape(title)}</h3>
+    <div class="table-wrap"><table class="compact-table"><thead><tr><th>Group</th><th>n</th><th>Median</th><th>Q1-Q3</th><th>Mean</th><th>SD</th></tr></thead>
+    <tbody>${clean.map(r => `<tr><td>${htmlEscape(String(r.label))}</td><td>${htmlEscape(String(r.n || 0))}</td><td>${htmlEscape(dec(r.median))}</td><td>${htmlEscape(dec(r.q1))} - ${htmlEscape(dec(r.q3))}</td><td>${htmlEscape(dec(r.mean))}</td><td>${htmlEscape(dec(r.sd))}</td></tr>`).join('')}</tbody></table></div>
+  </div>`;
+}
+
+function heatmapTable(rows) {
+  const clean = rows || [];
+  if (!clean.length) return `<div class="metric-chart wide"><h3>Topic × context heatmap</h3><p class="muted">Not enough data yet.</p></div>`;
+  return `<div class="metric-chart wide"><h3>Topic × context heatmap</h3><p class="muted small">Average engagement score by topic and context.</p>
+    <div class="table-wrap"><table class="compact-table heatmap-table"><thead><tr><th>Topic</th><th>No context</th><th>Context</th></tr></thead>
+    <tbody>${clean.map(r => `<tr><td>${htmlEscape(r.topic)}</td><td>${r.no_context === null || r.no_context === undefined ? '—' : htmlEscape(dec(r.no_context))} <span class="muted">n=${htmlEscape(String(r.no_context_n || 0))}</span></td><td>${r.context === null || r.context === undefined ? '—' : htmlEscape(dec(r.context))} <span class="muted">n=${htmlEscape(String(r.context_n || 0))}</span></td></tr>`).join('')}</tbody></table></div>
+  </div>`;
+}
+
+function renderStatsTable(descriptives) {
+  const rows = Object.entries(descriptives || {});
+  if (!rows.length) return '<p class="muted">No descriptive statistics yet.</p>';
+  return `<div class="table-wrap"><table><thead><tr><th>Metric</th><th>n</th><th>Mean</th><th>Median</th><th>SD</th><th>95% CI</th><th>Min-Max</th></tr></thead>
+    <tbody>${rows.map(([metric, s]) => `<tr><td>${htmlEscape(metric)}</td><td>${htmlEscape(String(s.n || 0))}</td><td>${htmlEscape(dec(s.mean))}</td><td>${htmlEscape(dec(s.median))}</td><td>${htmlEscape(dec(s.sd))}</td><td>${htmlEscape(dec(s.ci95_low))} – ${htmlEscape(dec(s.ci95_high))}</td><td>${htmlEscape(dec(s.min))} – ${htmlEscape(dec(s.max))}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+function renderStatisticalTests(stats) {
+  const tests = stats?.tests || {};
+  const rows = [
+    ['Medium vs small engagement', tests.model_medium_vs_small_engagement],
+    ['Context vs no context engagement', tests.context_vs_no_context_engagement],
+    ['Topic effect on engagement', tests.topic_effect_engagement],
+  ];
+  return `<div class="table-wrap"><table><thead><tr><th>Comparison</th><th>Test</th><th>n</th><th>Statistic</th><th>p</th><th>Effect</th><th>Note</th></tr></thead>
+    <tbody>${rows.map(([label, t]) => `<tr><td>${htmlEscape(label)}</td><td>${htmlEscape(t?.test || '')}</td><td>${htmlEscape(String(t?.n ?? ''))}</td><td>${t?.statistic === null || t?.statistic === undefined ? '—' : htmlEscape(dec(t.statistic))}</td><td>${htmlEscape(fmtP(t?.p))}</td><td>${t?.effect_size_r === null || t?.effect_size_r === undefined ? '—' : htmlEscape(dec(t.effect_size_r))}</td><td>${htmlEscape(t?.note || '')}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+function renderBig5Correlations(rows) {
+  const clean = rows || [];
+  if (!clean.length) return '<p class="muted">No Big Five correlations yet.</p>';
+  return `<div class="table-wrap"><table><thead><tr><th>Trait</th><th>Spearman ρ</th><th>p</th><th>n</th><th>Note</th></tr></thead>
+    <tbody>${clean.map(r => `<tr><td>${htmlEscape(r.trait)}</td><td>${htmlEscape(dec(r.rho))}</td><td>${htmlEscape(fmtP(r.p))}</td><td>${htmlEscape(String(r.n || 0))}</td><td>${htmlEscape(r.note || '')}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
 function renderMetricsTable(sessions) {
-  const rows = (sessions || []).slice(0, 80);
+  const rows = (sessions || []).slice(0, 120);
   if (!rows.length) return '<p class="muted">No completed/scored conversations yet.</p>';
   return `<div class="table-wrap"><table><thead><tr>
     <th>Participant</th><th>Topic</th><th>Model</th><th>Context</th><th>Engagement</th><th>Coherence</th><th>Topic</th><th>Novelty</th><th>Q rate</th><th>Turns</th>
@@ -1311,19 +1376,28 @@ function renderMetricsTable(sessions) {
 
 function researcherDashboardStyles() {
   return `<style>
-    .metrics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0;}
-    .metric-card{background:rgba(27,69,79,.06);border:1px solid rgba(27,69,79,.12);border-radius:14px;padding:14px;}
-    .metric-value{font-size:1.45rem;font-weight:800;color:#1B454F;}
-    .metric-label{font-weight:700;margin-top:4px;}
-    .metric-hint,.small{font-size:.82rem;opacity:.72;margin-top:4px;}
-    .charts-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin:16px 0;}
-    .metric-chart{background:#fff;border:1px solid rgba(27,69,79,.12);border-radius:16px;padding:16px;box-shadow:0 8px 20px rgba(0,0,0,.04);}
+    .dashboard-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0;}
+    .dashboard-tab{background:rgba(27,69,79,.08);color:#1B454F;border:1px solid rgba(27,69,79,.16);}
+    .dashboard-tab.active{background:#1B454F;color:#f4ecdf;}
+    .tab-panel{display:none;}
+    .tab-panel.active{display:block;}
+    .metrics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:16px 0;}
+    .metric-card{background:rgba(27,69,79,.06);border:1px solid rgba(27,69,79,.12);border-radius:16px;padding:16px;min-height:108px;}
+    .metric-value{font-size:1.65rem;font-weight:800;color:#1B454F;line-height:1;}
+    .metric-label{font-weight:700;margin-top:8px;}
+    .metric-hint,.small{font-size:.82rem;opacity:.72;margin-top:5px;}
+    .charts-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin:16px 0;}
+    .metric-chart{background:#fff;border:1px solid rgba(27,69,79,.12);border-radius:18px;padding:18px;box-shadow:0 8px 20px rgba(0,0,0,.04);}
+    .metric-chart.wide{grid-column:1 / -1;}
     .metric-chart h3{margin-top:0;margin-bottom:12px;}
-    .bar-row{display:grid;grid-template-columns:90px 1fr 82px;gap:8px;align-items:center;margin:10px 0;}
-    .bar-label{font-size:.88rem;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-    .bar-track{height:12px;background:rgba(27,69,79,.12);border-radius:999px;overflow:hidden;}
+    .bar-row{display:grid;grid-template-columns:110px 1fr 90px;gap:10px;align-items:center;margin:10px 0;}
+    .bar-label{font-size:.9rem;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .bar-track{height:13px;background:rgba(27,69,79,.12);border-radius:999px;overflow:hidden;}
     .bar-fill{height:100%;background:#1B454F;border-radius:999px;}
     .bar-value{font-size:.82rem;text-align:right;opacity:.82;}
+    .compact-table th,.compact-table td{padding:8px 10px;font-size:.9rem;}
+    .heatmap-table td:nth-child(2),.heatmap-table td:nth-child(3){font-weight:700;background:rgba(27,69,79,.04);}
+    .dashboard-note{background:rgba(27,69,79,.06);border-left:4px solid #1B454F;padding:12px 14px;border-radius:12px;margin:12px 0;}
   </style>`;
 }
 
@@ -1402,6 +1476,9 @@ async function renderResearcherDashboard(err = '') {
 
   const s = metrics.summary || {};
   const c = metrics.charts || {};
+  const st = metrics.statistics || {};
+  const m = st.matrices || {};
+  const d = st.distributions || {};
 
   app.innerHTML = `${researcherDashboardStyles()}<h2>Researcher dashboard</h2>${err ? errorBox(err) : ''}
     <div class="actions">
@@ -1409,38 +1486,96 @@ async function renderResearcherDashboard(err = '') {
       <a href="${API}/api/researcher/export.csv" id="exportLink">Download CSV export</a>
     </div>
     <div id="createdCodes"></div>
-
-    <h3>Results summary</h3>
+    ${s.metrics_error ? `<div class="dashboard-note"><strong>Metrics warning:</strong> ${htmlEscape(s.metrics_error)}</div>` : ''}
     <p class="muted">Embedding model: ${htmlEscape(s.embedding_model || 'not computed yet')}</p>
-    <div class="metrics-grid">
-      ${metricCard('Scored conversations', String(s.total_scored_conversations || 0))}
-      ${metricCard('Engagement score', dec(s.avg_engagement_score), 'Weighted overall metric')}
-      ${metricCard('Coherence', dec(s.avg_coherence), 'Consecutive-turn similarity')}
-      ${metricCard('Windowed coherence', dec(s.avg_windowed_coherence), 'Similarity to recent context')}
-      ${metricCard('Topic consistency', dec(s.avg_topic_consistency), 'Similarity to initial prompt')}
-      ${metricCard('Novelty', dec(s.avg_novelty), '1 - previous similarity')}
-      ${metricCard('Turn balance', dec(s.avg_turn_balance), 'Human vs Alex turns')}
-      ${metricCard('Token balance', dec(s.avg_token_balance), 'Human vs Alex tokens')}
-      ${metricCard('Question rate', dec(s.avg_question_rate), 'Question-bearing turns')}
+
+    <div class="dashboard-tabs">
+      <button type="button" class="dashboard-tab active" data-tab="overview">Overview</button>
+      <button type="button" class="dashboard-tab" data-tab="metrics">Conversation metrics</button>
+      <button type="button" class="dashboard-tab" data-tab="stats">Statistical analysis</button>
+      <button type="button" class="dashboard-tab" data-tab="embeddings">Embedding analysis</button>
+      <button type="button" class="dashboard-tab" data-tab="exports">Exports & participants</button>
     </div>
 
-    <h3>Plots</h3>
-    <div class="charts-grid">
-      ${barChart('Engagement by model size', c.engagement_by_model, 'Higher is better')}
-      ${barChart('Engagement by personality context', c.engagement_by_context, '0=false · 1=true')}
-      ${barChart('Engagement by topic', c.engagement_by_topic, 'Average score')}
-      ${barChart('Coherence by model size', c.coherence_by_model, 'Average consecutive similarity')}
-      ${barChart('Topic consistency by topic', c.topic_consistency_by_topic, 'Average prompt similarity')}
-      ${barChart('Question rate by model', c.question_rate_by_model, 'Lower is not always better')}
-      ${barChart('Token balance by model', c.token_balance_by_model, 'Closer to 1 is more balanced')}
-      ${barChart('Conversations by topic', c.conversations_by_topic, 'Completed scored conversations')}
-    </div>
+    <section class="tab-panel active" id="tab-overview">
+      <h3>Overview</h3>
+      <div class="metrics-grid">
+        ${metricCard('Participants', String(s.participants || data.participants.length || 0))}
+        ${metricCard('Completed participants', String(s.completed_participants || 0), pct(s.participant_completion_rate || 0))}
+        ${metricCard('Scored conversations', String(s.total_scored_conversations || 0))}
+        ${metricCard('Engagement score', dec(s.avg_engagement_score), 'Weighted overall metric')}
+        ${metricCard('Coherence', dec(s.avg_coherence), 'Consecutive-turn similarity')}
+        ${metricCard('Topic consistency', dec(s.avg_topic_consistency), 'Similarity to initial prompt')}
+        ${metricCard('Novelty', dec(s.avg_novelty), '1 - previous similarity')}
+        ${metricCard('Question rate', dec(s.avg_question_rate), 'Question-bearing turns')}
+      </div>
+      <div class="charts-grid">
+        ${groupedMetricTable('Model comparison', m.model_metrics)}
+        ${groupedMetricTable('Personality context comparison', m.context_metrics)}
+        ${barChart('Engagement by topic', c.engagement_by_topic, 'Average score')}
+        ${histogramChart('Engagement distribution', c.engagement_histogram || d.engagement_histogram)}
+      </div>
+    </section>
 
-    <h3>Conversation metrics</h3>
-    ${renderMetricsTable(metrics.sessions || [])}
+    <section class="tab-panel" id="tab-metrics">
+      <h3>Conversation metrics</h3>
+      <div class="charts-grid">
+        ${barChart('Engagement by model size', c.engagement_by_model, 'Higher is better')}
+        ${barChart('Engagement by personality context', c.engagement_by_context, '0=false · 1=true')}
+        ${barChart('Coherence by model size', c.coherence_by_model, 'Average consecutive similarity')}
+        ${barChart('Topic consistency by topic', c.topic_consistency_by_topic, 'Average prompt similarity')}
+        ${barChart('Question rate by model', c.question_rate_by_model, 'Lower is not always better')}
+        ${barChart('Token balance by model', c.token_balance_by_model, 'Closer to 1 is more balanced')}
+        ${boxPlotTable('Engagement box summary by model', d.engagement_box_by_model)}
+        ${boxPlotTable('Engagement box summary by context', d.engagement_box_by_context)}
+        ${heatmapTable(m.topic_context_heatmap)}
+      </div>
+      <h3>Conversation-level table</h3>
+      ${renderMetricsTable(metrics.sessions || [])}
+    </section>
 
-    <h3>Participants</h3>
-    <div class="table-wrap"><table><thead><tr><th>Participant</th><th>Access code</th><th>Created</th><th>Step</th><th>Completed</th></tr></thead><tbody>${data.participants.map(p => `<tr><td>${htmlEscape(p.participant_id)}</td><td title="${htmlEscape(p.access_code ? 'Code hidden for privacy' : '')}">${htmlEscape(maskAccessCode(p.access_code || ''))}</td><td>${htmlEscape(p.created_at)}</td><td>${htmlEscape(p.current_step)}</td><td>${p.completed ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table></div>`;
+    <section class="tab-panel" id="tab-stats">
+      <h3>Descriptive statistics</h3>
+      ${renderStatsTable(st.descriptives || {})}
+      <h3>Statistical tests</h3>
+      <p class="muted">Wilcoxon signed-rank is used for within-participant model/context comparisons. Friedman is used for repeated topic comparisons. P-values are approximate when SciPy is not installed.</p>
+      ${renderStatisticalTests(st)}
+      <h3>Big Five correlations</h3>
+      <p class="muted">Spearman correlations compare participant Big Five scores with mean engagement score.</p>
+      ${renderBig5Correlations(st.big5_correlations || [])}
+    </section>
+
+    <section class="tab-panel" id="tab-embeddings">
+      <h3>Embedding analysis</h3>
+      <div class="metrics-grid">
+        ${metricCard('Embedding model', s.embedding_model || 'not computed yet', 'Sentence-transformers or hash fallback')}
+        ${metricCard('Windowed coherence', dec(s.avg_windowed_coherence), 'Similarity to recent context')}
+        ${metricCard('Topic consistency', dec(s.avg_topic_consistency), 'Similarity to initial prompt')}
+        ${metricCard('Novelty', dec(s.avg_novelty), 'Semantic distance from previous turn')}
+      </div>
+      <div class="dashboard-note">The backend stores utterance and topic embeddings in the metrics tables. UMAP/t-SNE projections can be added later if you enable heavier scientific packages on the server.</div>
+      <div class="charts-grid">
+        ${barChart('Topic consistency by topic', c.topic_consistency_by_topic, 'Average prompt similarity')}
+        ${barChart('Conversations by topic', c.conversations_by_topic, 'Completed scored conversations')}
+      </div>
+    </section>
+
+    <section class="tab-panel" id="tab-exports">
+      <h3>Participants</h3>
+      <div class="table-wrap"><table><thead><tr><th>Participant</th><th>Access code</th><th>Created</th><th>Step</th><th>Completed</th></tr></thead><tbody>${data.participants.map(p => `<tr><td>${htmlEscape(p.participant_id)}</td><td title="${htmlEscape(p.access_code ? 'Code hidden for privacy' : '')}">${htmlEscape(maskAccessCode(p.access_code || ''))}</td><td>${htmlEscape(p.created_at)}</td><td>${htmlEscape(p.current_step)}</td><td>${p.completed ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table></div>
+      <h3>Exports</h3>
+      <p class="muted">The CSV export includes participant metadata, post-questionnaire answers, conversation transcripts, turn metrics, embeddings-derived similarities, and session-level engagement scores.</p>
+    </section>`;
+
+  document.querySelectorAll('.dashboard-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.dashboard-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      const panel = document.getElementById(`tab-${tab.dataset.tab}`);
+      if (panel) panel.classList.add('active');
+    });
+  });
 
   document.getElementById('createCodes').onclick = async () => {
     const raw = prompt('How many participant codes should I create?', '10');

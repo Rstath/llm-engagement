@@ -611,29 +611,84 @@ function route() {
 }
 
 function renderConsent() {
-  app.innerHTML = `<h2>Informed consent form</h2>
-    <p>This consent form follows the structure recommended by the HCI informed-consent generator: study basics, procedure, data and privacy, voluntary participation, and research contacts.</p>
-    <h3>Study basics</h3>
-    <p><strong>Study title:</strong> Personality and demographic questionnaire for text-based interaction research<br>
-    <strong>Research context:</strong> Academic HCI thesis research<br>
-    <strong>Estimated duration:</strong> approximately 10–15 minutes per short conversation stage<br>
-    <strong>Participants:</strong> adults aged 18 or older</p>
-    <h3>Purpose and goal of the study</h3>
-    <p>The purpose of this study is to collect demographic information, mobile text-communication habits, conversational-AI experience, Big Five personality scores, and multiple short text-based conversations with open-source AI models. The goal is to analyze text-based interaction and engagement in a thesis project.</p>
-    <h3>What you will do</h3>
-    <ol><li>complete this informed consent form,</li><li>complete a demographic and pre-experiment questionnaire,</li><li>complete the Big Five Inventory questionnaire,</li><li>select topic preferences,</li><li>complete multiple short mobile-style chats with open-source AI models at your own pace.</li></ol>
-    <h3>Data and privacy</h3>
-    <p>The study stores your questionnaire answers, computed Big Five scores, selected topic preferences, anonymous participant code, and chat messages in a research database. These results are visible only to the protected researcher dashboard and are not shown to participants. The data may be analyzed in aggregated or anonymized form for thesis purposes. Please do not enter identifying information unless explicitly requested.</p>
-    <h3>Voluntary participation and withdrawal</h3>
-    <p>Participation is voluntary. You may stop at any time. After each completed form or conversation, your progress is saved so that you can leave and resume later from the next step by using the same participant code.</p>
-    <h3>Research contact</h3>
-    <p>For questions about the study, contact the researcher responsible for this thesis project.</p>
-    <div class="section consent-checks">
-      <label><input id="c1" type="checkbox"> I confirm that I am at least 18 years old.</label>
-      <label><input id="c2" type="checkbox"> I understand that participation is voluntary and that I may stop at any time.</label>
-      <label><input id="c3" type="checkbox"> I agree that my questionnaire answers, Big Five scores, topic preferences, anonymous participant code, and chat messages may be saved for research analysis.</label>
-    </div>` + actions('<button id="continue" disabled>Save and continue</button>');
+  app.innerHTML = `<div class="preview-document pdf-document consent-document">
+    <h1>Informed Consent for Study Participation</h1>
+    <p>You are invited to take part in the online study "Using Large Language Models in the evaluation process of input methods for mobile devices". The study is conducted by Roumpini Stathopoulou and overseen by Andreas Komninos at University of Patras. We expect about 30 participants. Data collection is planned from 2026-07-01 to 2026-09-30. Key points:</p>
+    <ul class="intro-list">
+      <li>Participation is voluntary. You may stop at any time without penalty or withdraw your consent</li>
+      <li>One session of the online study takes about 60 minutes</li>
+      <li>You will not receive compensation for participating</li>
+      <li>We collect demographic information (e.g. age and gender) for analysis</li>
+      <li>The study may involve collecting the following data: your input and written notes</li>
+      <li>Recordings and research data are processed in accordance with the GDPR. They will be pseudonymized (using a code), stored, analyzed, and published only in summarized form, so that no one outside the research team can link the coded data to you without the key.</li>
+    </ul>
+    <p>The alternative is not to take part. If you have questions about the study, the consent process, or your rights as a participant, please contact Andreas Komninos. Please read the following information carefully and take the time you need before deciding.</p>
+
+    <section>
+      <h2>1. Purpose and Goal of this Research</h2>
+      <p>To investigate how personality context and different open-source large language models influence user engagement during short mobile text conversations. To evaluate conversational engagement using participant questionnaires and automated conversation analysis across different experimental conditions. Your participation supports this research. Results may be published in scientific papers, theses, or presented at academic conferences.</p>
+    </section>
+
+    <section>
+      <h2>2. Study Participation</h2>
+      <p>Your participation in this online study is voluntary. You may skip questions or tasks and stop at any time without penalty and without giving a reason. If you feel uncomfortable, you may stop immediately. The researchers may end your participation if this is necessary for organizational reasons, because of invalid trials, or for your safety. Repeated participation in this study is not permitted.</p>
+    </section>
+
+    <section>
+      <h2>3. Study Procedure</h2>
+      <p>If you agree to participate, the study will usually proceed as follows:</p>
+      <ol>
+        <li>Read the study information and provide informed consent.</li>
+        <li>Complete a short demographic questionnaire and the Big Five personality questionnaire.</li>
+        <li>Select the conversation topics according to your preferences.</li>
+        <li>Complete multiple short mobile-style conversations with AI conversational agents.</li>
+        <li>Complete a short post-experiment questionnaire about your interaction experience.</li>
+        <li>Review the completion page and finish participation.</li>
+      </ol>
+      <p>If needed, the researchers can provide confirmation of participation after the study.</p>
+    </section>
+
+    <section>
+      <h2>4. Risks and Benefits</h2>
+      <p>Based on current knowledge, this online study does not involve risks beyond those of everyday activities. Some questions or tasks may feel uncomfortable. You may skip them or stop participating at any time. Despite technical and organizational safeguards, a loss of confidentiality or unauthorized access to data cannot be completely ruled out. You are unlikely to receive a direct personal benefit. However, your participation supports research in human-computer interaction.</p>
+    </section>
+
+    <section>
+      <h2>5. Data Protection and Confidentiality</h2>
+      <p>In this study, we collect directly identifying information, where necessary, and research data. Processing is based on your consent and carried out in accordance with the General Data Protection Regulation (GDPR). You may request access to identifiable data, ask for incorrect information to be corrected, and - where legally possible - request restriction of processing or deletion. With your consent, we will collect your input and written notes. Study results may be published in scientific papers or other research reports. Directly identifying information will be kept only as long as necessary. It will then be deleted or separated from the research data. During analysis, only the researchers and authorized project staff will have access to the raw data, transcribed interviews, and observation protocols. Directly identifying information will be stored separately and will not be published. The data will be pseudonymized using a code and published only in summarized form, so that no one outside the research team can link the coded data to you without the key. Direct quotations or interview content will be prepared for publication so that direct identifiers are removed or changed where possible. Because no contact details are collected, we cannot contact you afterwards about follow-up questions, future studies, or possible data protection incidents.</p>
+    </section>
+
+    <section>
+      <h2>6. Identification of Investigators</h2>
+      <p>If you have questions about the study or your data, please contact:</p>
+      <div class="preview-two-column">
+        <div>
+          <h3>Research team</h3>
+          <p class="preview-contact-line">Roumpini Stathopoulou (st1059667@ceid.upatras.gr)</p>
+          <p class="preview-contact-line">University of Patras</p>
+        </div>
+        <div>
+          <h3>Principal investigator</h3>
+          <p class="preview-contact-line">Andreas Komninos</p>
+          <p class="preview-contact-line">akomninos@ceid.upatras.gr</p>
+          <p class="preview-contact-line">University of Patras</p>
+          <p class="preview-contact-line">University Campus</p>
+          <p class="preview-contact-line">26504, Patras, Greece</p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="section consent-checks">
+    <label><input id="c1" type="checkbox"> I confirm that I am at least 18 years old.</label>
+    <label><input id="c2" type="checkbox"> I understand that participation is voluntary and that I may stop at any time.</label>
+    <label><input id="c3" type="checkbox"> I agree that my questionnaire answers, Big Five scores, topic preferences, anonymous participant code, and chat messages may be saved for research analysis.</label>
+  </div>` + actions('<button id="continue" disabled>Save and continue</button>');
+
   const btn = document.getElementById('continue');
+  const c1 = document.getElementById('c1');
+  const c2 = document.getElementById('c2');
+  const c3 = document.getElementById('c3');
   const update = () => { btn.disabled = !(c1.checked && c2.checked && c3.checked); };
   [c1,c2,c3].forEach(x => x.addEventListener('change', update));
   btn.onclick = async () => {
@@ -642,7 +697,7 @@ function renderConsent() {
       age_confirmed: c1.checked,
       voluntary_participation: c2.checked,
       data_storage_agreed: c3.checked,
-      consent_version: 'HCI structured consent with participant-code resume'
+      consent_version: 'UPatras GDPR consent 2026-07-01 to 2026-09-30'
     };
     try { setProgress(await api('/api/consent', { method: 'POST', body: JSON.stringify(payload) })); route(); }
     catch (e) { app.insertAdjacentHTML('beforeend', errorBox(e)); }

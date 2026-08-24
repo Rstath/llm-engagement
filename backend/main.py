@@ -145,6 +145,13 @@ def init_db():
             UNIQUE(participant_id, conversation_order)
         );
 
+        CREATE TABLE IF NOT EXISTS conversation_session_questionnaires (
+            session_id TEXT PRIMARY KEY,
+            participant_id TEXT NOT NULL,
+            answers_json TEXT NOT NULL DEFAULT '{}',
+            submitted_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS conversation_turns (
             turn_id TEXT PRIMARY KEY,
             participant_id TEXT NOT NULL,
@@ -381,68 +388,93 @@ def topic_preference_label(pid: str, topic_id: str) -> str:
 
 
 def generate_conversation_assignments(pid: str, reset_existing: bool = False):
-    """Create conversation assignments for one participant.
+    """Create the final randomized 16-conversation queue for one participant.
 
-    TEST MODE:
-    - Creates only 1 conversation so you can quickly reach the post-questionnaire
-      and thank-you page.
-    - Uses the first "most interesting" selected topic.
-    - Uses medium model with personality context enabled.
+    The participant selects four topics (2 most interesting + 2 least interesting).
+    Every selected topic is crossed with every cell of the 2 x 2 experimental design:
+      - small model / no personality context
+      - small model / personality context
+      - medium model / no personality context
+      - medium model / personality context
 
-    For the real study, restore the full 16-condition assignment logic.
+    This yields 4 topics x 4 factor cells = 16 conversations per participant.
+
+    Each topic already contains four equivalent scenario variations (A-D). Within a
+    topic, those four variations are assigned one-to-one to the four factor cells, so
+    the participant does not receive the exact same scenario prompt four times. The
+    condition-to-variation mapping and the final order of all 16 conversations are
+    participant-specific and reproducibly randomized.
+
+    Agent style is fixed to Neutral Engagement Agent so style cannot confound the
+    personality-context manipulation.
     """
     selected_topics = selected_experiment_topics(pid)
 
     with connect() as conn:
         existing = conn.execute(
-            "SELECT COUNT(*) FROM conversation_assignments WHERE participant_id=?",
-            (pid,),
+            "SELECT COUNT(*) FROM conversation_assignments WHERE participant_id=?", (pid,)
         ).fetchone()[0]
         if existing and not reset_existing:
             return
         if reset_existing:
             session_rows = conn.execute(
-                "SELECT session_id FROM conversation_assignments WHERE participant_id=?",
-                (pid,),
+                "SELECT session_id FROM conversation_assignments WHERE participant_id=?", (pid,)
             ).fetchall()
             session_ids = [r[0] for r in session_rows]
             if session_ids:
+                conn.executemany("DELETE FROM conversation_turn_metrics WHERE session_id=?", [(sid,) for sid in session_ids])
+                conn.executemany("DELETE FROM conversation_session_metrics WHERE session_id=?", [(sid,) for sid in session_ids])
+                conn.executemany("DELETE FROM conversation_session_questionnaires WHERE session_id=?", [(sid,) for sid in session_ids])
                 conn.executemany("DELETE FROM conversation_turns WHERE session_id=?", [(sid,) for sid in session_ids])
             conn.execute("DELETE FROM conversation_assignments WHERE participant_id=?", (pid,))
             conn.execute("DELETE FROM experiment_sessions WHERE participant_id=?", (pid,))
 
+        conditions = [
+            ("small", SMALL_LLM_MODEL, False),
+            ("small", SMALL_LLM_MODEL, True),
+            ("medium", MEDIUM_LLM_MODEL, False),
+            ("medium", MEDIUM_LLM_MODEL, True),
+        ]
+
         rows = []
+        for topic_id in selected_topics:
+            variation_ids = list(TOPICS[topic_id]["variations"].keys())
+            if len(variation_ids) < len(conditions):
+                raise RuntimeError(
+                    f"Topic {topic_id} needs at least {len(conditions)} equivalent variations "
+                    "for the 16-conversation factorial design."
+                )
 
-        # ---------- TEST MODE ----------
-        # Only ONE conversation is generated so you can quickly test:
-        # conversation -> post-experiment questionnaire -> thank-you page.
-        #
-        # It uses the participant's first "most interesting" selected topic.
-        # Condition: medium model + personality context enabled.
-        # For the real study, restore the full 16-condition block.
-        prog = get_progress(pid)
-        topic_id = (prog.get("most_topics") or selected_topics)[0]
+            # Randomize which equivalent scenario variation is paired with each
+            # model/context cell, independently for every participant and topic.
+            topic_variations = shuffled_for_participant(
+                pid, f"{topic_id}:factorial-variations", variation_ids
+            )[:len(conditions)]
+            topic_conditions = shuffled_for_participant(
+                pid, f"{topic_id}:factorial-conditions", conditions
+            )
 
-        variation_id = stable_choice(
-            f"{pid}:{topic_id}:single-test-variant",
-            list(TOPICS[topic_id]["variations"].keys()),
-        )
+            for variation_id, (model_size, model_name, context_enabled) in zip(
+                topic_variations, topic_conditions
+            ):
+                rows.append({
+                    "topic_id": topic_id,
+                    "variation_id": variation_id,
+                    "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
+                    "topic_preference": topic_preference_label(pid, topic_id),
+                    "style_name": "Neutral Engagement Agent",
+                    "model_size": model_size,
+                    "model_name": model_name,
+                    "personality_context_enabled": context_enabled,
+                })
 
-        rows.append({
-            "topic_id": topic_id,
-            "variation_id": variation_id,
-            "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
-            "topic_preference": topic_preference_label(pid, topic_id),
-            "style_name": stable_choice(
-                f"{pid}:{topic_id}:single-test-style",
-                list(STYLE_PROMPTS.keys()),
-            ),
-            "model_size": "medium",
-            "model_name": MEDIUM_LLM_MODEL,
-            "personality_context_enabled": True,
-        })
+        # Randomize the sequence of all 16 conversations so participants do not see
+        # a predictable model, context, topic, or preference ordering.
+        rows = shuffled_for_participant(pid, "conversation-order-16", rows)
 
-        # No shuffle needed because there is only one test conversation.
+        if len(rows) != 16:
+            raise RuntimeError(f"Expected 16 conversation assignments, created {len(rows)}.")
+
         for order, row in enumerate(rows, start=1):
             conn.execute(
                 """
@@ -453,9 +485,9 @@ def generate_conversation_assignments(pid: str, reset_existing: bool = False):
                 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
-                    str(uuid.uuid4()), pid, order, now(), now(),
-                    row["topic_id"], row["variation_id"], row["topic_prompt"], row["topic_preference"], row["style_name"],
-                    row["model_size"], row["model_name"], int(row["personality_context_enabled"]), "pending",
+                    str(uuid.uuid4()), pid, order, now(), now(), row["topic_id"], row["variation_id"],
+                    row["topic_prompt"], row["topic_preference"], row["style_name"], row["model_size"],
+                    row["model_name"], int(row["personality_context_enabled"]), "pending",
                 ),
             )
         conn.commit()
@@ -466,6 +498,19 @@ def count_assignments(pid: str) -> Dict[str, int]:
         total = conn.execute("SELECT COUNT(*) FROM conversation_assignments WHERE participant_id=?", (pid,)).fetchone()[0]
         complete = conn.execute("SELECT COUNT(*) FROM conversation_assignments WHERE participant_id=? AND status='complete'", (pid,)).fetchone()[0]
     return {"total": int(total), "complete": int(complete), "remaining": int(total - complete)}
+
+
+def pending_questionnaire_session(pid: str):
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT a.* FROM conversation_assignments a
+            LEFT JOIN conversation_session_questionnaires q ON q.session_id=a.session_id
+            WHERE a.participant_id=? AND a.status='complete' AND q.session_id IS NULL
+            ORDER BY a.conversation_order ASC LIMIT 1
+            """, (pid,)
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def ensure_assignment(pid):
@@ -1458,9 +1503,13 @@ def chat(participant_id: str):
     assignment = ensure_assignment(participant_id)
     counts = count_assignments(participant_id)
     if not assignment:
-        # All conversations are finished. The next required step is the single post-experiment questionnaire.
-        set_step(participant_id, "post", completed=0)
-        return {"done": True, "all_done": True, "needs_post": True, "transcript": [], "turns": 0, "target_total_turns": TARGET_TOTAL_TURNS, "assignment_counts": counts}
+        pending = pending_questionnaire_session(participant_id)
+        if pending:
+            set_step(participant_id, "post", completed=0)
+            return {"done": True, "all_done": counts["remaining"] == 0, "needs_post": True, "transcript": [], "turns": 0, "target_total_turns": TARGET_TOTAL_TURNS, "assignment_counts": counts}
+        if counts["remaining"] == 0:
+            set_step(participant_id, "done", completed=1)
+        return {"done": True, "all_done": True, "needs_post": False, "transcript": [], "turns": 0, "target_total_turns": TARGET_TOTAL_TURNS, "assignment_counts": counts}
 
     transcript = load_transcript(participant_id, assignment["session_id"])
     if not transcript:
@@ -1513,9 +1562,8 @@ def chat_send(data: ChatIn):
         compute_and_store_session_metrics(session_id)
         counts = count_assignments(data.participant_id)
         all_done = counts["remaining"] == 0
-        if all_done:
-            set_step(data.participant_id, "post", completed=0)
-        return {"done": True, "all_done": all_done, "needs_post": all_done, "transcript": transcript, "assignment_counts": counts}
+        set_step(data.participant_id, "post", completed=0)
+        return {"done": True, "all_done": all_done, "needs_post": True, "transcript": transcript, "assignment_counts": counts}
 
     reply = make_reply(data.participant_id, assignment, transcript)
     save_turn(data.participant_id, "Agent", reply, session_id)
@@ -1527,10 +1575,10 @@ def chat_send(data: ChatIn):
         compute_and_store_session_metrics(session_id)
     counts = count_assignments(data.participant_id)
     all_done = counts["remaining"] == 0
-    if all_done and conversation_done:
+    if conversation_done:
         set_step(data.participant_id, "post", completed=0)
 
-    return {"done": conversation_done, "all_done": all_done, "needs_post": all_done and conversation_done, "transcript": transcript, "assignment_counts": counts}
+    return {"done": conversation_done, "all_done": all_done, "needs_post": conversation_done, "transcript": transcript, "assignment_counts": counts}
 
 
 @app.post("/api/finish/{participant_id}")
@@ -1560,6 +1608,21 @@ def finish(participant_id: str):
     return get_progress(participant_id)
 
 
+@app.get("/api/post/pending/{participant_id}")
+def post_pending(participant_id: str):
+    assignment = pending_questionnaire_session(participant_id)
+    if not assignment:
+        return {"pending": False}
+    counts = count_assignments(participant_id)
+    return {
+        "pending": True,
+        "session_id": assignment["session_id"],
+        "topic_id": assignment["topic_id"],
+        "topic_preference": assignment["topic_preference"],
+        "remaining_conversations": counts["remaining"],
+    }
+
+
 @app.post("/api/post")
 def post_questionnaire(data: PostQuestionnaireIn):
     required = [
@@ -1568,27 +1631,38 @@ def post_questionnaire(data: PostQuestionnaireIn):
     ]
     missing = [key for key in required if data.answers.get(key) in (None, "")]
     if missing:
-        raise HTTPException(400, "Please complete all required post-experiment questions.")
+        raise HTTPException(400, "Please complete all required post-conversation questions.")
+
+    assignment = pending_questionnaire_session(data.participant_id)
+    if not assignment:
+        raise HTTPException(400, "No completed conversation is waiting for a questionnaire.")
 
     clean_answers = dict(data.answers)
     for key in required:
         try:
             value = int(clean_answers[key])
         except Exception:
-            raise HTTPException(400, "Post-experiment ratings must be numbers from 1 to 5.")
+            raise HTTPException(400, "Post-conversation ratings must be numbers from 1 to 5.")
         if value < 1 or value > 5:
-            raise HTTPException(400, "Post-experiment ratings must be numbers from 1 to 5.")
+            raise HTTPException(400, "Post-conversation ratings must be numbers from 1 to 5.")
         clean_answers[key] = value
 
     clean_answers["submitted_at"] = now()
+    clean_answers["session_id"] = assignment["session_id"]
     with connect() as conn:
         conn.execute(
-            "UPDATE progress SET post_json=? WHERE participant_id=?",
-            (jdump(clean_answers), data.participant_id),
+            "INSERT OR REPLACE INTO conversation_session_questionnaires(session_id,participant_id,answers_json,submitted_at) VALUES(?,?,?,?)",
+            (assignment["session_id"], data.participant_id, jdump(clean_answers), clean_answers["submitted_at"]),
         )
+        # Keep post_json as the most recently submitted questionnaire for backward-compatible exports/UI.
+        conn.execute("UPDATE progress SET post_json=? WHERE participant_id=?", (jdump(clean_answers), data.participant_id))
         conn.commit()
 
-    set_step(data.participant_id, "done", completed=1)
+    counts = count_assignments(data.participant_id)
+    if counts["remaining"] > 0:
+        set_step(data.participant_id, "chat", completed=0)
+    else:
+        set_step(data.participant_id, "done", completed=1)
     return get_progress(data.participant_id)
 
 @app.post("/api/researcher/login")
@@ -1691,7 +1765,7 @@ def export_csv():
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow([
-        "participant_id", "access_code", "participant_created_at", "current_step", "completed", "post_json",
+        "participant_id", "access_code", "participant_created_at", "current_step", "completed", "post_json", "session_questionnaire_json",
         "session_id", "conversation_order", "assignment_status", "topic_id", "variation_id",
         "topic_preference", "model_size", "model_name", "personality_context_enabled",
         "style_name", "speaker", "text", "timestamp",
@@ -1703,7 +1777,7 @@ def export_csv():
     with connect() as conn:
         rows = conn.execute("""
             SELECT
-                p.participant_id, ac.access_code, p.created_at AS participant_created_at, p.current_step, p.completed, pr.post_json,
+                p.participant_id, ac.access_code, p.created_at AS participant_created_at, p.current_step, p.completed, pr.post_json, q.answers_json AS session_questionnaire_json,
                 a.session_id, a.conversation_order, a.status AS assignment_status, a.topic_id, a.variation_id,
                 a.topic_preference, a.model_size, a.model_name, a.personality_context_enabled, a.style_name,
                 c.speaker, c.text, c.created_at AS turn_time, c.turn_index,
@@ -1718,11 +1792,12 @@ def export_csv():
             LEFT JOIN conversation_turns c ON a.session_id=c.session_id
             LEFT JOIN conversation_turn_metrics tm ON c.turn_id=tm.turn_id
             LEFT JOIN conversation_session_metrics sm ON a.session_id=sm.session_id
+            LEFT JOIN conversation_session_questionnaires q ON a.session_id=q.session_id
             ORDER BY p.created_at DESC, a.conversation_order ASC, c.turn_index ASC
         """).fetchall()
     for r in rows:
         writer.writerow([
-            r["participant_id"], r["access_code"] or "", r["participant_created_at"], r["current_step"], r["completed"], r["post_json"] or "{}",
+            r["participant_id"], r["access_code"] or "", r["participant_created_at"], r["current_step"], r["completed"], r["post_json"] or "{}", r["session_questionnaire_json"] or "{}",
             r["session_id"] or "", r["conversation_order"] or "", r["assignment_status"] or "", r["topic_id"] or "", r["variation_id"] or "",
             r["topic_preference"] or "", r["model_size"] or "", r["model_name"] or "", r["personality_context_enabled"] if r["personality_context_enabled"] is not None else "",
             r["style_name"] or "", r["speaker"] or "", r["text"] or "", r["turn_time"] or "",

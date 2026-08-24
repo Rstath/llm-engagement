@@ -642,8 +642,8 @@ function renderConsent() {
         <li>Read the study information and provide informed consent.</li>
         <li>Complete a short demographic questionnaire and the Big Five personality questionnaire.</li>
         <li>Select the conversation topics according to your preferences.</li>
-        <li>Complete multiple short mobile-style conversations with AI conversational agents.</li>
-        <li>Complete a short post-experiment questionnaire about your interaction experience.</li>
+        <li>Complete 16 short mobile-style conversations with AI conversational agents.</li>
+        <li>Complete a short questionnaire after each conversation about that interaction.</li>
         <li>Review the completion page and finish participation.</li>
       </ol>
       <p>If needed, the researchers can provide confirmation of participation after the study.</p>
@@ -720,8 +720,8 @@ function renderInstructions() {
         <ul>
           <li>Complete a few short questionnaires.</li>
           <li>Select conversation topics based on your preferences.</li>
-          <li>Participate in one or more mobile-style text conversations with an AI conversational partner.</li>
-          <li>Complete a short questionnaire after the conversation(s).</li>
+          <li>Participate in 16 short mobile-style text conversations with an AI conversational partner.</li>
+          <li>Complete a short questionnaire immediately after each conversation.</li>
         </ul>
         <p class="muted">The study takes approximately 45–60 minutes in total.</p>
       </section>
@@ -966,10 +966,6 @@ async function renderChat(err = '') {
     </svg></span><span class="battery"><span class="battery-level"></span></span></span></div>` : '';
 
   const assignment = data.assignment || {};
-  const positionText = assignment.conversation_order && assignment.total_conversations
-    ? `Conversation ${assignment.conversation_order} of ${assignment.total_conversations}`
-    : 'Conversation';
-
   const inputHtml = done
     ? `<p class="muted chat-complete">Conversation complete.</p>`
     : `<form class="chat-form" id="chatForm"><div class="message-composer"><textarea id="chatText" rows="1" inputmode="text" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" placeholder="Message"></textarea><button aria-label="Send message" type="submit" class="send-btn" disabled><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="M5.5 11.5L12 5l6.5 6.5"></path></svg></button></div></form>`;
@@ -1202,19 +1198,14 @@ async function renderChat(err = '') {
 
   const finish = document.getElementById('finish');
   if (finish) {
-    const isLastConversation = Boolean(data.all_done || data.assignment_counts?.remaining === 0 || data.assignment?.remaining_conversations === 0);
-    finish.textContent = isLastConversation ? 'Go to questionnaire' : 'Next conversation';
+    // Every completed conversation is followed immediately by its own questionnaire.
+    finish.textContent = 'Go to questionnaire';
     finish.onclick = async () => {
-      if (isLastConversation) {
-        const progress = await api(`/api/session`, {
-          method: 'POST',
-          body: JSON.stringify({ participant_id: state.participant })
-        });
-        renderProgressFromServer(progress);
-      } else {
-        const progress = await api(`/api/finish/${state.participant}`, { method: 'POST' });
-        renderProgressFromServer(progress);
-      }
+      const progress = await api(`/api/session`, {
+        method: 'POST',
+        body: JSON.stringify({ participant_id: state.participant })
+      });
+      renderProgressFromServer(progress);
     };
   }
 }
@@ -1262,23 +1253,23 @@ function validatePostQuestionnaire(answers) {
 
 function renderPostQuestionnaire(errors = {}) {
   document.body.dataset.step = 'post';
-  const saved = state.progress?.post || {};
-  const selectedEmotions = saved.emotions || [];
+  const saved = {};
+  const selectedEmotions = [];
   const emotionOptions = ['Interested', 'Engaged', 'Curious', 'Comfortable', 'Neutral', 'Confused', 'Bored', 'Frustrated'];
 
-  app.innerHTML = `<h2>Post-experiment questionnaire</h2>
-    <p class="muted">You have completed all conversations. Please answer these final questions about the overall experience.</p>
+  app.innerHTML = `<h2>Conversation questionnaire</h2>
+    <p class="muted">Please rate the conversation you just completed. Your answers are linked only to that conversation and its experimental condition.</p>
 
-    ${likertRow('post_engagement', 'The conversations were engaging.', saved.engagement, errors)}
+    ${likertRow('post_engagement', 'The conversation was engaging.', saved.engagement, errors)}
     ${likertRow('post_naturalness', 'The AI messages felt natural.', saved.naturalness, errors)}
     ${likertRow('post_responsiveness', 'The AI responded appropriately to what I wrote.', saved.responsiveness, errors)}
-    ${likertRow('post_coherence', 'The conversations flowed coherently.', saved.coherence, errors)}
-    ${likertRow('post_topic_consistency', 'The conversations stayed on topic.', saved.topic_consistency, errors)}
+    ${likertRow('post_coherence', 'The conversation flowed coherently.', saved.coherence, errors)}
+    ${likertRow('post_topic_consistency', 'The conversation stayed on topic.', saved.topic_consistency, errors)}
     ${likertRow('post_willingness_continue', 'I would be willing to continue chatting with this AI.', saved.willingness_continue, errors)}
     ${likertRow('post_overall_satisfaction', 'Overall, I was satisfied with the interaction experience.', saved.overall_satisfaction, errors)}
 
     <div class="section compact post-item">
-      <strong>How did you feel during the conversations?</strong>
+      <strong>How did you feel during this conversation?</strong>
       <p class="muted">Select any that apply.</p>
       <div class="checkbox-grid">
         ${emotionOptions.map(emotion => `<label><input type="checkbox" name="post_emotion" value="${htmlEscape(emotion)}" ${selectedEmotions.includes(emotion) ? 'checked' : ''}> ${htmlEscape(emotion)}</label>`).join('')}
@@ -1292,7 +1283,7 @@ function renderPostQuestionnaire(errors = {}) {
     </div>
 
     ${errors.form ? errorBox(errors.form) : ''}
-  ` + actions('<button id="completeExperiment">Complete experiment</button>');
+  ` + actions('<button id="completeExperiment">Submit questionnaire</button>');
 
   const btn = document.getElementById('completeExperiment');
   btn.onclick = async () => {
@@ -1633,7 +1624,7 @@ async function renderResearcherDashboard(err = '') {
       <h3>Participants</h3>
       <div class="table-wrap"><table><thead><tr><th>Participant</th><th>Access code</th><th>Created</th><th>Step</th><th>Completed</th></tr></thead><tbody>${data.participants.map(p => `<tr><td>${htmlEscape(p.participant_id)}</td><td title="${htmlEscape(p.access_code ? 'Code hidden for privacy' : '')}">${htmlEscape(maskAccessCode(p.access_code || ''))}</td><td>${htmlEscape(p.created_at)}</td><td>${htmlEscape(p.current_step)}</td><td>${p.completed ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table></div>
       <h3>Exports</h3>
-      <p class="muted">The CSV export includes participant metadata, post-questionnaire answers, conversation transcripts, turn metrics, embeddings-derived similarities, and session-level engagement scores.</p>
+      <p class="muted">The CSV export includes participant metadata, per-conversation questionnaire answers, conversation transcripts, turn metrics, embedding-derived similarities, and session-level engagement scores.</p>
     </section>`;
 
   document.querySelectorAll('.dashboard-tab').forEach(tab => {

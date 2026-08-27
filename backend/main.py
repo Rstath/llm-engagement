@@ -35,7 +35,7 @@ OPENROUTER_APP_NAME = os.getenv("OPENROUTER_APP_NAME", "LLM Engagement Study")
 
 # OpenRouter model IDs must exist exactly. These two are valid OpenRouter IDs.
 # If you run LM Studio, set these to the local model IDs shown in LM Studio.
-SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "google/gemma-3n-e4b-it")
+SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "google/gemma-3-4b-it")
 MEDIUM_LLM_MODEL = os.getenv("MEDIUM_LLM_MODEL", "google/gemma-4-31b-it")
 DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.9"))
 DEFAULT_MAX_AGENT_TOKENS = int(os.getenv("DEFAULT_MAX_AGENT_TOKENS", "70"))

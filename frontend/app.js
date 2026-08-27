@@ -300,14 +300,8 @@ function syntheticOlderMessage(transcript) {
 function visibleTranscript(transcript) {
   return [syntheticOlderMessage(transcript), ...(transcript || [])];
 }
-function conversationContextHtml(assignment = {}) {
-  const scenario = String(assignment.topic_prompt || '').trim();
-  if (!scenario) return '<div class="chat-day-divider">Today</div>';
-  return `<div class="chat-day-divider">Today</div>
-    <div class="scenario-context" role="note" aria-label="Conversation scenario">
-      <div class="scenario-context-label">Scenario</div>
-      <div class="scenario-context-text">${htmlEscape(scenario)}</div>
-    </div>`;
+function conversationContextHtml() {
+  return '<div class="chat-day-divider">Today</div>';
 }
 function renderedChatHtml(transcript, assignment = {}) {
   const turns = transcript || [];
@@ -320,9 +314,6 @@ function ensureConversationContextStyles() {
   style.id = 'conversation-context-styles';
   style.textContent = `
     .chat-day-divider { text-align:center; font-size:12px; font-weight:600; color:#6b7280; margin:16px 0 10px; }
-    .scenario-context { max-width:82%; margin:0 auto 18px; padding:10px 12px; border-radius:12px; background:rgba(120,120,128,.10); text-align:center; }
-    .scenario-context-label { font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:#6b7280; margin-bottom:4px; }
-    .scenario-context-text { font-size:13px; line-height:1.35; color:inherit; }
   `;
   document.head.appendChild(style);
 }

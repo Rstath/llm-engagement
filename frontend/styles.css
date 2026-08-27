@@ -1426,3 +1426,50 @@ body[data-step="chat"] .card {
     grid-template-columns: 1fr;
   }
 }
+
+/* Desktop-only access modal for phones and tablets */
+.desktop-only-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.68);
+  backdrop-filter: blur(5px);
+}
+
+.desktop-only-modal-dialog {
+  width: min(92vw, 460px);
+  margin: 0;
+}
+
+.desktop-only-modal-content {
+  border: 0;
+  border-radius: 18px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.24);
+}
+
+.desktop-only-modal-body {
+  padding: 34px 28px 30px;
+  text-align: center;
+}
+
+.desktop-only-modal-body h2 {
+  margin: 8px 0 14px;
+}
+
+.desktop-only-modal-body p {
+  margin: 8px 0;
+}
+
+.desktop-only-icon {
+  font-size: 42px;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+body.desktop-only-blocked {
+  overflow: hidden !important;
+}

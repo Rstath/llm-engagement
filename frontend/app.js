@@ -207,6 +207,28 @@ function detectDevice() {
   return 'desktop';
 }
 function isDesktopDevice() { return state.device === 'desktop' && window.matchMedia('(min-width: 1025px)').matches; }
+
+function showDesktopOnlyModal() {
+  document.querySelectorAll('.desktop-only-modal-backdrop').forEach(el => el.remove());
+  const modal = document.createElement('div');
+  modal.className = 'modal fade show desktop-only-modal-backdrop';
+  modal.setAttribute('role', 'alertdialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', 'desktop-only-title');
+  modal.innerHTML = `
+    <div class="modal-dialog modal-dialog-centered desktop-only-modal-dialog">
+      <div class="modal-content desktop-only-modal-content">
+        <div class="modal-body desktop-only-modal-body">
+          <div class="desktop-only-icon" aria-hidden="true">🖥️</div>
+          <h2 id="desktop-only-title">Please use a desktop computer</h2>
+          <p>This study is designed to be completed on a desktop or laptop computer.</p>
+          <p class="muted">Please reopen this page on a desktop device to continue.</p>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  document.body.classList.add('desktop-only-blocked');
+}
 function stepLabel(step) {
   return ({ consent: 'the consent form', instructions: 'the study instructions', pre: 'the pre-experiment questionnaire', big5: 'the Big Five Inventory', topics: 'topic selection', topic_preferences: 'topic selection', chat: 'the conversation', post: 'the post-experiment questionnaire', done: 'the thank-you page' })[step] || 'where you left off';
 }
@@ -533,6 +555,12 @@ function renderParticipantLogin(err = '') {
 async function init() {
   state.device = detectDevice();
   document.body.dataset.device = state.device;
+
+  if (state.device === 'mobile' || state.device === 'tablet') {
+    showDesktopOnlyModal();
+    return;
+  }
+
   state.meta = await api('/api/meta');
 
   renderHelpButton();

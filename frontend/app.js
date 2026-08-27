@@ -43,11 +43,15 @@ async function api(path, options = {}) {
       message = 'Wrong password. Please try again';
     }
 
-    throw new Error(
+    const err = new Error(
       typeof message === 'string'
         ? message
         : JSON.stringify(message)
     );
+    err.status = res.status;
+    err.detail = message;
+    if (message && typeof message === 'object') err.code = message.code;
+    throw err;
   }
 
   return res.json();
@@ -180,6 +184,27 @@ function renderParticipantLogoutButton() {
   btn.onclick = clearParticipantSession;
 }
 function errorBox(err) { return `<p class="error">${htmlEscape(err.message || err)}</p>`; }
+function showTopRightToast(message, duration = 6500) {
+  document.querySelectorAll('.study-toast').forEach(el => el.remove());
+  const toast = document.createElement('div');
+  toast.className = 'study-toast';
+  toast.setAttribute('role', 'status');
+  toast.setAttribute('aria-live', 'polite');
+  toast.textContent = message;
+  Object.assign(toast.style, {
+    position: 'fixed', top: '20px', right: '20px', zIndex: '100000',
+    maxWidth: '380px', padding: '13px 16px', borderRadius: '10px',
+    background: '#222', color: '#fff', fontSize: '14px', lineHeight: '1.4',
+    boxShadow: '0 8px 24px rgba(0,0,0,.2)', opacity: '0',
+    transform: 'translateY(-8px)', transition: 'opacity .18s ease, transform .18s ease'
+  });
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => { toast.style.opacity = '1'; toast.style.transform = 'translateY(0)'; });
+  window.setTimeout(() => {
+    toast.style.opacity = '0'; toast.style.transform = 'translateY(-8px)';
+    window.setTimeout(() => toast.remove(), 220);
+  }, duration);
+}
 function actions(...buttons) { return `<div class="actions">${buttons.join('')}</div>`; }
 function radioGroup(name, options, selected = '', horizontal = false) {
   return `<div class="radio-group ${horizontal ? 'horizontal' : ''}">${options.map(o => `<label><input type="radio" name="${htmlEscape(name)}" value="${htmlEscape(o)}" ${selected === o ? 'checked' : ''}> ${htmlEscape(o)}</label>`).join('')}</div>`;
@@ -220,7 +245,7 @@ function showDesktopOnlyModal() {
       <div class="modal-content desktop-only-modal-content">
         <div class="modal-body desktop-only-modal-body">
           <div class="desktop-only-icon" aria-hidden="true">🖥️</div>
-          <h2 id="desktop-only-title">Please use a desktop</h2>
+          <h2 id="desktop-only-title">Please use a desktop computer</h2>
           <p>This study is designed to be completed on a desktop or laptop computer.</p>
           <p class="muted">Please reopen this page on a desktop device to continue.</p>
         </div>
@@ -1151,15 +1176,37 @@ async function renderChat(err = '') {
 
     } catch (e) {
       removeTypingRow();
-      messages.insertAdjacentHTML(
-        'beforeend',
-        chatMessageHtml({
-          speaker: 'Agent',
-          text: e.message || String(e),
-          created_at: new Date().toISOString()
-        })
-      );
-      scrollMessagesToBottom();
+
+      const retryExhausted = e?.code === 'llm_retry_exhausted' ||
+        (typeof e?.detail === 'object' && e.detail?.code === 'llm_retry_exhausted');
+
+      if (retryExhausted) {
+        // The backend rolled this batch back, so reload the authoritative
+        // transcript and restore the participant text for a clean resend.
+        try {
+          const refreshed = await api(`/api/chat/${state.participant}`);
+          data.transcript = refreshed.transcript || [];
+          data.turns = data.transcript.length;
+          messages.innerHTML = visibleTranscript(data.transcript).map(chatMessageHtml).join('');
+          scrollMessagesToBottom();
+        } catch {}
+
+        if (textEl) {
+          textEl.disabled = false;
+          textEl.value = batchTexts.join(' ');
+          updateComposerState(textEl, sendBtn);
+          textEl.focus({ preventScroll: true });
+        }
+        showTopRightToast('Conversation is taking longer than expected. Please try sending your message again');
+      } else {
+        // Do not inject infrastructure errors into the experimental transcript.
+        if (textEl) {
+          textEl.disabled = false;
+          textEl.value = batchTexts.join(' ');
+          updateComposerState(textEl, sendBtn);
+        }
+        showTopRightToast('Conversation is taking longer than expected. Please try sending your message again');
+      }
     } finally {
       agentRequestInFlight = false;
       if (pendingUserTexts.length) {
@@ -1583,12 +1630,28 @@ async function renderResearcherDashboard(err = '') {
     return `<div class="table-wrap"><table class="compact-table"><thead><tr><th>Sequence</th><th>Condition order</th><th>Assigned</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   };
 
+  const accessCodesTable = () => {
+    const codes = data.access_codes || [];
+    if (!codes.length) return '<div class="dashboard-note">No participant codes have been created yet.</div>';
+    const rows = codes.map((r, idx) => `<tr>
+      <td>${idx + 1}</td>
+      <td><strong>${htmlEscape(r.access_code || '')}</strong></td>
+      <td>${htmlEscape(r.participant_id || '')}</td>
+      <td>${r.used_at ? 'Used' : 'Unused'}</td>
+      <td>${htmlEscape(r.last_login_at || '—')}</td>
+      <td>${Number(r.is_active) === 1 ? 'Active' : 'Inactive'}</td>
+    </tr>`).join('');
+    return `<div class="table-wrap"><table class="compact-table"><thead><tr><th>#</th><th>Participant code</th><th>Participant ID</th><th>Status</th><th>Last login</th><th>Active</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  };
+
   app.innerHTML = `${researcherDashboardStyles()}<h2>Researcher dashboard</h2>${err ? errorBox(err) : ''}
     <div class="actions">
       <button id="createCodes">Create participant codes</button>
       <a href="${API}/api/researcher/export.csv" id="exportLink">Download CSV export</a>
     </div>
-    <div id="createdCodes"></div>
+    <h3>Participant codes</h3>
+    <p class="muted">All generated participant codes are stored on the server and remain visible here. New codes are appended to this list.</p>
+    ${accessCodesTable()}
     ${s.metrics_error ? `<div class="dashboard-note"><strong>Metrics warning:</strong> ${htmlEscape(s.metrics_error)}</div>` : ''}
     <p class="muted">Embedding model: ${htmlEscape(s.embedding_model || 'not computed yet')}</p>
 
@@ -1674,7 +1737,7 @@ async function renderResearcherDashboard(err = '') {
 
     <section class="tab-panel" id="tab-exports">
       <h3>Participants</h3>
-      <div class="table-wrap"><table><thead><tr><th>Participant</th><th>Access code</th><th>Created</th><th>Step</th><th>Completed</th></tr></thead><tbody>${data.participants.map(p => `<tr><td>${htmlEscape(p.participant_id)}</td><td title="${htmlEscape(p.access_code ? 'Code hidden for privacy' : '')}">${htmlEscape(maskAccessCode(p.access_code || ''))}</td><td>${htmlEscape(p.created_at)}</td><td>${htmlEscape(p.current_step)}</td><td>${p.completed ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Participant</th><th>Access code</th><th>Created</th><th>Last progress update</th><th>Step</th><th>Completed</th></tr></thead><tbody>${data.participants.map(p => `<tr><td>${htmlEscape(p.participant_id)}</td><td><strong>${htmlEscape(p.access_code || '')}</strong></td><td>${htmlEscape(p.created_at)}</td><td>${htmlEscape(p.updated_at || '—')}</td><td>${htmlEscape(p.current_step)}</td><td>${p.completed ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table></div>
       <h3>Exports</h3>
       <p class="muted">The CSV export includes Latin-square sequence and condition metadata, post-condition questionnaire answers, conversation transcripts, turn metrics, embedding-derived similarities, and conversation-level engagement scores.</p>
     </section>`;
@@ -1711,14 +1774,8 @@ async function renderResearcherDashboard(err = '') {
         throw new Error(await res.text());
       }
 
-      const data = await res.json();
-
-      const box = document.getElementById('createdCodes');
-      box.innerHTML = `<div class="section">
-        <h3>New participant codes</h3>
-        <p class="muted">Copy these codes and give one code to each supervised participant.</p>
-        <textarea readonly rows="8">${htmlEscape((data.codes || []).map(c => c.access_code).join('\n'))}</textarea>
-      </div>`;
+      await res.json();
+      await renderResearcherDashboard();
     } catch (e) {
       renderResearcherDashboard(e);
     }

@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import requests
+import time
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -891,6 +892,28 @@ def clean_llm_text(text: str) -> str:
     text = text.strip(" .,!\\\"'“”‘’")
     return text
 
+class LLMRequestError(RuntimeError):
+    def __init__(self, status_code: int, message: str):
+        super().__init__(message)
+        self.status_code = int(status_code)
+
+
+def delete_latest_human_turn(pid: str, session_id: str, expected_text: str = ""):
+    """Rollback only the most recent human turn for this session after an LLM failure."""
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT turn_id, text FROM conversation_turns
+            WHERE participant_id=? AND session_id=? AND speaker='Human'
+            ORDER BY turn_index DESC LIMIT 1
+            """,
+            (pid, session_id),
+        ).fetchone()
+        if row and (not expected_text or str(row["text"]) == str(expected_text)):
+            conn.execute("DELETE FROM conversation_turns WHERE turn_id=?", (row["turn_id"],))
+            conn.commit()
+
+
 def call_llm(model_name, messages):
     url = llm_chat_url()
     headers = {"Content-Type": "application/json"}
@@ -898,12 +921,10 @@ def call_llm(model_name, messages):
     if LLM_API_KEY:
         headers["Authorization"] = f"Bearer {LLM_API_KEY}"
 
-    # OpenRouter requires/recommends these app attribution headers.
-    if "openrouter.ai" in url:
+    is_openrouter = "openrouter.ai" in url
+    if is_openrouter:
         headers["HTTP-Referer"] = OPENROUTER_SITE_URL or "http://localhost:5173"
         headers["X-Title"] = OPENROUTER_APP_NAME
-        # Ask OpenRouter to include provider-routing diagnostics on failures.
-        # This does not expose the API key and does not change privacy/provider policy.
         headers["X-OpenRouter-Metadata"] = "enabled"
 
     payload = {
@@ -913,12 +934,37 @@ def call_llm(model_name, messages):
         "max_tokens": DEFAULT_MAX_AGENT_TOKENS,
     }
 
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=120)
+    # Preserve the experimental model, but allow OpenRouter to use another
+    # provider serving that exact model. Participant data must not be routed
+    # to providers that collect prompts for training.
+    if is_openrouter:
+        payload["provider"] = {
+            "allow_fallbacks": True,
+            "data_collection": "deny",
+        }
 
-        # Give a useful error instead of a vague 404/400.
-        if not r.ok:
+    # Retry only transient failures with the SAME model. The total retry
+    # window is intentionally bounded so the UI can recover gracefully.
+    retryable = {429, 500, 502, 503, 504}
+    backoffs = [1.0, 2.0, 4.0, 8.0]
+    last_status = 503
+    last_detail = ""
+
+    for attempt in range(len(backoffs) + 1):
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=120)
+            last_status = int(r.status_code)
+
+            if r.ok:
+                data = r.json()
+                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                content = clean_llm_text(content)
+                if not content:
+                    raise LLMRequestError(502, f"Empty LLM response from {url}.")
+                return content
+
             detail = (r.text or "").strip()[:1600]
+            last_detail = detail
             request_id = (
                 r.headers.get("x-request-id")
                 or r.headers.get("x-openrouter-request-id")
@@ -926,20 +972,31 @@ def call_llm(model_name, messages):
                 or ""
             )
             suffix = f" Request-ID={request_id}" if request_id else ""
-            raise RuntimeError(
-                f"{r.status_code} from {url}. Model={model_name!r}. "
-                f"OpenRouter-Response={detail or '<empty response body>'}.{suffix}"
-            )
 
-        data = r.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        content = clean_llm_text(content)
-        if not content:
-            raise RuntimeError(f"Empty LLM response from {url}. Raw={str(data)[:800]}")
-        return content
+            if r.status_code not in retryable or attempt >= len(backoffs):
+                raise LLMRequestError(
+                    r.status_code,
+                    f"{r.status_code} from {url}. Model={model_name!r}. "
+                    f"OpenRouter-Response={detail or '<empty response body>'}.{suffix}"
+                )
 
-    except Exception as exc:
-        return f"[LLM server unavailable or misconfigured: {exc}]"
+            # Respect Retry-After when present, otherwise exponential backoff.
+            retry_after = r.headers.get("Retry-After")
+            try:
+                delay = max(backoffs[attempt], float(retry_after)) if retry_after else backoffs[attempt]
+            except (TypeError, ValueError):
+                delay = backoffs[attempt]
+            time.sleep(min(delay, 12.0))
+
+        except LLMRequestError:
+            raise
+        except requests.RequestException as exc:
+            last_detail = str(exc)
+            if attempt >= len(backoffs):
+                raise LLMRequestError(503, f"LLM request failed after retries: {exc}")
+            time.sleep(backoffs[attempt])
+
+    raise LLMRequestError(last_status, last_detail or "LLM request failed")
 
 def previous_agent_asked_question(transcript: List[Dict[str, Any]]) -> bool:
     for turn in reversed(transcript or []):
@@ -1817,7 +1874,16 @@ def chat_send(data: ChatIn):
     transcript = load_transcript(data.participant_id, session_id)
 
     if len(transcript) < TARGET_TOTAL_TURNS:
-        reply = make_reply(data.participant_id, assignment, transcript)
+        try:
+            reply = make_reply(data.participant_id, assignment, transcript)
+        except LLMRequestError as exc:
+            # Do not let API failures become experimental turns. Roll back the
+            # optimistic human turn so the participant can resend cleanly.
+            delete_latest_human_turn(data.participant_id, session_id, text)
+            raise HTTPException(
+                status_code=503 if exc.status_code in {429, 500, 502, 503, 504} else 502,
+                detail={"code": "llm_retry_exhausted", "upstream_status": exc.status_code},
+            )
         save_turn(data.participant_id, "Agent", reply, session_id)
         transcript = load_transcript(data.participant_id, session_id)
 
@@ -1946,7 +2012,10 @@ def overview():
     with connect() as conn:
         participants = [dict(r) for r in conn.execute("SELECT * FROM participants ORDER BY created_at DESC").fetchall()]
         sessions = [dict(r) for r in conn.execute("SELECT * FROM conversation_assignments ORDER BY participant_id, conversation_order ASC").fetchall()]
-        access_codes = [dict(r) for r in conn.execute("SELECT access_code,participant_id,created_at,used_at,last_login_at,is_active FROM participant_access_codes ORDER BY created_at DESC").fetchall()]
+        access_codes = [dict(r) for r in conn.execute("SELECT access_code,participant_id,created_at,used_at,last_login_at,is_active FROM participant_access_codes ORDER BY created_at ASC").fetchall()]
+        code_by_participant = {row["participant_id"]: row["access_code"] for row in access_codes}
+        for participant in participants:
+            participant["access_code"] = code_by_participant.get(participant.get("participant_id"), "")
         designs = [dict(r) for r in conn.execute("SELECT * FROM participant_experiment_design ORDER BY assigned_at DESC").fetchall()]
         condition_questionnaires = [dict(r) for r in conn.execute("SELECT * FROM condition_block_questionnaires ORDER BY participant_id, condition_order ASC").fetchall()]
 

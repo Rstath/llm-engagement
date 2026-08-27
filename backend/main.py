@@ -1418,7 +1418,14 @@ def root():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    # Safe deployment diagnostics: never expose the API key itself.
+    return {
+        "status": "ok",
+        "llm_url": llm_chat_url(),
+        "llm_api_key_configured": bool(LLM_API_KEY),
+        "small_model": SMALL_LLM_MODEL,
+        "medium_model": MEDIUM_LLM_MODEL,
+    }
 
 @app.get("/api/meta")
 def meta():

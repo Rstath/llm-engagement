@@ -13,10 +13,10 @@ Use these first:
 
 ```env
 SMALL_LLM_MODEL=google/gemma-3n-e4b-it
-MEDIUM_LLM_MODEL=google/gemma-4-31b-it:free
+MEDIUM_LLM_MODEL=google/gemma-4-31b-it
 ```
 
-OpenRouter currently lists `google/gemma-4-31b-it:free`. For the small condition, `google/gemma-3n-e4b-it` is the available E4B-class Gemma model. If your provider later exposes exact Gemma 4 E4B, change only `SMALL_LLM_MODEL` in Render.
+OpenRouter lists `google/gemma-3n-e4b-it` for the small E4B-class condition. Use an OpenRouter model ID that is currently available for the medium condition; this package defaults to `google/gemma-4-31b-it`.
 
 ---
 
@@ -72,12 +72,12 @@ APP_SECRET=make-a-long-random-secret
 RESEARCHER_PASSWORD=choose-a-password
 DB_PATH=human_experiment_data.db
 ALLOWED_ORIGINS=https://YOUR_GITHUB_USERNAME.github.io
-LLM_BASE_URL=https://openrouter.ai/api/v1/chat/completions
+LLM_BASE_URL=https://openrouter.ai/api/v1
 LLM_API_KEY=your_openrouter_api_key
 OPENROUTER_SITE_URL=https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPO_NAME/
 OPENROUTER_APP_NAME=LLM Engagement Study
 SMALL_LLM_MODEL=google/gemma-3n-e4b-it
-MEDIUM_LLM_MODEL=google/gemma-4-31b-it:free
+MEDIUM_LLM_MODEL=google/gemma-4-31b-it
 DEFAULT_TEMPERATURE=0.7
 DEFAULT_MAX_AGENT_TOKENS=130
 TARGET_TOTAL_TURNS=14

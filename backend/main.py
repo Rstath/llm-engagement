@@ -36,7 +36,7 @@ OPENROUTER_APP_NAME = os.getenv("OPENROUTER_APP_NAME", "LLM Engagement Study")
 # OpenRouter model IDs must exist exactly. These two are valid OpenRouter IDs.
 # If you run LM Studio, set these to the local model IDs shown in LM Studio.
 SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "google/gemma-3n-e4b-it")
-MEDIUM_LLM_MODEL = os.getenv("MEDIUM_LLM_MODEL", "google/gemma-3-27b-it")
+MEDIUM_LLM_MODEL = os.getenv("MEDIUM_LLM_MODEL", "google/gemma-4-31b-it")
 DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.9"))
 DEFAULT_MAX_AGENT_TOKENS = int(os.getenv("DEFAULT_MAX_AGENT_TOKENS", "70"))
 TARGET_TOTAL_TURNS = int(os.getenv("TARGET_TOTAL_TURNS", "14"))
@@ -758,6 +758,9 @@ def call_llm(model_name, messages):
     if "openrouter.ai" in url:
         headers["HTTP-Referer"] = OPENROUTER_SITE_URL or "http://localhost:5173"
         headers["X-Title"] = OPENROUTER_APP_NAME
+        # Ask OpenRouter to include provider-routing diagnostics on failures.
+        # This does not expose the API key and does not change privacy/provider policy.
+        headers["X-OpenRouter-Metadata"] = "enabled"
 
     payload = {
         "model": model_name,
@@ -771,9 +774,17 @@ def call_llm(model_name, messages):
 
         # Give a useful error instead of a vague 404/400.
         if not r.ok:
-            detail = r.text[:800]
+            detail = (r.text or "").strip()[:1600]
+            request_id = (
+                r.headers.get("x-request-id")
+                or r.headers.get("x-openrouter-request-id")
+                or r.headers.get("cf-ray")
+                or ""
+            )
+            suffix = f" Request-ID={request_id}" if request_id else ""
             raise RuntimeError(
-                f"{r.status_code} from {url}. Model={model_name!r}. Response={detail}"
+                f"{r.status_code} from {url}. Model={model_name!r}. "
+                f"OpenRouter-Response={detail or '<empty response body>'}.{suffix}"
             )
 
         data = r.json()
@@ -1426,6 +1437,83 @@ def health():
         "small_model": SMALL_LLM_MODEL,
         "medium_model": MEDIUM_LLM_MODEL,
     }
+
+@app.get("/api/llm-diagnostic")
+def llm_diagnostic():
+    """Safely test OpenRouter model visibility and one tiny completion.
+
+    Returns no API key and sends no participant data.
+    """
+    url = llm_chat_url()
+    result = {
+        "llm_url": url,
+        "api_key_configured": bool(LLM_API_KEY),
+        "models": {},
+    }
+
+    if not LLM_API_KEY:
+        result["error"] = "LLM_API_KEY is not configured"
+        return result
+
+    base_headers = {
+        "Authorization": f"Bearer {LLM_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    if "openrouter.ai" in url:
+        base_headers["HTTP-Referer"] = OPENROUTER_SITE_URL or "http://localhost:5173"
+        base_headers["X-Title"] = OPENROUTER_APP_NAME
+        base_headers["X-OpenRouter-Metadata"] = "enabled"
+
+    for label, model_name in (
+        ("small", SMALL_LLM_MODEL),
+        ("medium", MEDIUM_LLM_MODEL),
+    ):
+        item = {"model": model_name}
+
+        # 1) Verify the model is visible to this OpenRouter account/key.
+        try:
+            lookup_url = f"https://openrouter.ai/api/v1/model/{model_name}"
+            mr = requests.get(
+                lookup_url,
+                headers={"Authorization": f"Bearer {LLM_API_KEY}"},
+                timeout=30,
+            )
+            item["model_lookup_status"] = mr.status_code
+            if not mr.ok:
+                item["model_lookup_response"] = (mr.text or "")[:1000]
+        except Exception as exc:
+            item["model_lookup_error"] = str(exc)
+
+        # 2) Test provider routing with a harmless, tiny prompt.
+        try:
+            payload = {
+                "model": model_name,
+                "messages": [{"role": "user", "content": "Reply with exactly: ok"}],
+                "temperature": 0,
+                "max_tokens": 8,
+            }
+            rr = requests.post(url, headers=base_headers, json=payload, timeout=60)
+            item["chat_status"] = rr.status_code
+            if rr.ok:
+                data = rr.json()
+                item["chat_ok"] = True
+                item["resolved_model"] = data.get("model")
+            else:
+                item["chat_ok"] = False
+                item["chat_response"] = (rr.text or "")[:1600]
+                item["request_id"] = (
+                    rr.headers.get("x-request-id")
+                    or rr.headers.get("x-openrouter-request-id")
+                    or rr.headers.get("cf-ray")
+                )
+        except Exception as exc:
+            item["chat_ok"] = False
+            item["chat_error"] = str(exc)
+
+        result["models"][label] = item
+
+    return result
+
 
 @app.get("/api/meta")
 def meta():

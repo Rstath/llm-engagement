@@ -16,7 +16,7 @@ SMALL_LLM_MODEL=google/gemma-3n-e4b-it
 MEDIUM_LLM_MODEL=google/gemma-4-31b-it
 ```
 
-OpenRouter currently lists `google/gemma-4-31b-it:free`. For the small condition, `google/gemma-3n-e4b-it` is the available E4B-class Gemma model. If your provider later exposes exact Gemma 4 E4B, change only `SMALL_LLM_MODEL` in Render.
+OpenRouter lists `google/gemma-3n-e4b-it` for the small E4B-class condition. Use an OpenRouter model ID that is currently available for the medium condition; this package defaults to `google/gemma-4-31b-it`.
 
 ---
 

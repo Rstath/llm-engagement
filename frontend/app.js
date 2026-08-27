@@ -1695,4 +1695,14 @@ async function renderResearcherDashboard(err = '') {
   };
 }
 window.addEventListener('hashchange', route);
-init().catch(e => app.innerHTML = errorBox(e));
+
+function hideInitialLoader() {
+  const loader = document.getElementById('initialLoader');
+  if (!loader) return;
+  loader.classList.add('is-hidden');
+  setTimeout(() => loader.remove(), 250);
+}
+
+init()
+  .catch(e => { app.innerHTML = errorBox(e); })
+  .finally(hideInitialLoader);

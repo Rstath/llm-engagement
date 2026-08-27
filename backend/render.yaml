@@ -13,10 +13,14 @@ services:
         sync: false
       - key: ALLOWED_ORIGINS
         sync: false
-      - key: LOCAL_LLM_BASE_URL
+      - key: LLM_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: LLM_API_KEY
         sync: false
-      - key: LOCAL_LLM_API_KEY
+      - key: OPENROUTER_SITE_URL
         sync: false
+      - key: OPENROUTER_APP_NAME
+        value: LLM Engagement Study
       - key: SMALL_LLM_MODEL
         sync: false
       - key: MEDIUM_LLM_MODEL

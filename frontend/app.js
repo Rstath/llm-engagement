@@ -785,7 +785,7 @@ function renderPre(errors = {}) {
     <div class="section"><strong>How often do you use messaging applications (e.g., WhatsApp, Messenger, Viber)? *</strong>${radioGroup('messaging_app_use', ['Less than once per day', '1–3 times per day', '4–10 times per day', 'More than 10 times per day'], saved.messaging_app_use)}${fieldError(errors, 'messaging_app_use')}</div>
 
     <h3>Mobile Communication Habits</h3>
-    <div class="section"><label><strong>How easy do you find it to communicate through text messages? *</strong><input id="text_communication_ease" type="range" min="1" max="5" step="1" value="${htmlEscape(saved.text_communication_ease_1_5 || 3)}"><span class="range-label"><span>Not easy at all</span><strong id="rangeValue">${htmlEscape(saved.text_communication_ease_1_5 || 3)}</strong><span>Very easy</span></span></label></div>
+    <div class="section"><label><strong>How easy do you find it to communicate through text messages? *</strong><input id="text_communication_ease" type="range" min="0" max="5" step="1" value="${htmlEscape(saved.text_communication_ease_1_5 || 0)}"><span class="range-label"><span>Not easy at all</span><strong id="rangeValue">${saved.text_communication_ease_1_5 ? htmlEscape(saved.text_communication_ease_1_5) : 'Select'}</strong><span>Very easy</span></span></label></div>
     <p><strong>How frequently do you use the following text messaging styles when you communicate? *</strong></p>
     <p class="muted">Especially when you want to say a lot in your messages, consider whether you typically write everything in one long message or break your thoughts into multiple shorter consecutive messages.</p>
     <div class="section"><strong>One or two words per message *</strong>${radioGroup('style_one_two_words', LIKERT_FREQUENCY, saved.message_style_one_two_words, true)}${fieldError(errors, 'style_one_two_words')}</div>
@@ -801,7 +801,7 @@ function renderPre(errors = {}) {
     <div id="aiFollowUps"></div>` + actions('<button id="continue" disabled>Continue to Big Five inventory</button>');
 
   const range = document.getElementById('text_communication_ease');
-  range.addEventListener('input', () => document.getElementById('rangeValue').textContent = range.value);
+  range.addEventListener('input', () => { document.getElementById('rangeValue').textContent = range.value === '0' ? 'Select' : range.value; updateButton(); });
   const aiBox = document.getElementById('aiFollowUps');
   const btn = document.getElementById('continue');
 
@@ -833,6 +833,7 @@ function renderPre(errors = {}) {
       gender: answers.gender,
       education: answers.education,
       messaging_app_use: answers.messaging_app_use,
+      text_communication_ease: answers.text_communication_ease_1_5 > 0 ? answers.text_communication_ease_1_5 : '',
       style_one_two_words: answers.message_style_one_two_words,
       style_single_sentence: answers.message_style_single_sentence,
       style_short_message: answers.message_style_short_2_3_sentences,
@@ -886,16 +887,22 @@ function renderBig5(err = '') {
     <div class="scale-help"><strong>Likert scale for every item:</strong><br>1 = Disagree strongly | 2 = Disagree a little | 3 = Neither agree nor disagree | 4 = Agree a little | 5 = Agree strongly</div>
     <p><strong>I see myself as someone who...</strong></p>
     <div class="bfi-grid">${Object.entries(items).map(([num, text]) => {
-      const current = Number(saved[num] || 3);
-      return `<div class="bfi-item"><label><strong>${num}. ${htmlEscape(text)}</strong><input class="bfi-slider" type="range" min="1" max="5" step="1" name="bfi_${num}" value="${current}"><span class="range-label"><span>1</span><strong id="bfi_value_${num}">${current} - ${htmlEscape(BFI_SCALE_LABELS[current])}</strong><span>5</span></span></label></div>`;
+      const current = Number(saved[num] || 0);
+      const currentLabel = current > 0 ? `${current} - ${htmlEscape(BFI_SCALE_LABELS[current])}` : 'Select';
+      return `<div class="bfi-item"><label><strong>${num}. ${htmlEscape(text)}</strong><input class="bfi-slider" type="range" min="0" max="5" step="1" name="bfi_${num}" value="${current}"><span class="range-label"><span>1</span><strong id="bfi_value_${num}">${currentLabel}</strong><span>5</span></span></label></div>`;
     }).join('')}</div>${err ? errorBox(err) : ''}` + actions('<button id="continue">Submit questionnaire</button>');
   document.querySelectorAll('.bfi-slider').forEach(slider => slider.addEventListener('input', () => {
     const num = slider.name.replace('bfi_', '');
-    document.getElementById(`bfi_value_${num}`).textContent = `${slider.value} - ${BFI_SCALE_LABELS[slider.value]}`;
+    document.getElementById(`bfi_value_${num}`).textContent = slider.value === '0' ? 'Select' : `${slider.value} - ${BFI_SCALE_LABELS[slider.value]}`;
   }));
   document.getElementById('continue').onclick = async () => {
     const answers = {};
     for (const num of Object.keys(items)) answers[num] = Number(document.querySelector(`input[name="bfi_${num}"]`).value);
+    const unanswered = Object.entries(answers).filter(([, value]) => value < 1).map(([num]) => num);
+    if (unanswered.length) {
+      renderBig5(`Please answer all Big Five items before submitting. Unanswered item${unanswered.length > 1 ? 's' : ''}: ${unanswered.join(', ')}.`);
+      return;
+    }
     try { setProgress(await api('/api/big5', { method: 'POST', body: JSON.stringify({ participant_id: state.participant, answers }) })); route(); }
     catch(e) { renderBig5(e); }
   };
@@ -1695,4 +1702,14 @@ async function renderResearcherDashboard(err = '') {
   };
 }
 window.addEventListener('hashchange', route);
-init().catch(e => app.innerHTML = errorBox(e));
+
+function hideInitialLoader() {
+  const loader = document.getElementById('initialLoader');
+  if (!loader) return;
+  loader.classList.add('is-hidden');
+  setTimeout(() => loader.remove(), 250);
+}
+
+init()
+  .catch(e => { app.innerHTML = errorBox(e); })
+  .finally(hideInitialLoader);

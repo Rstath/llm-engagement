@@ -2088,8 +2088,16 @@ def researcher_metrics():
 
     with connect() as conn:
         rows = [dict(r) for r in conn.execute("""
-            SELECT * FROM conversation_session_metrics
-            ORDER BY updated_at DESC
+            SELECT
+                sm.*,
+                a.latin_square_sequence,
+                a.condition_code,
+                a.condition_order,
+                a.conversation_within_condition
+            FROM conversation_session_metrics sm
+            LEFT JOIN conversation_assignments a
+              ON sm.session_id = a.session_id
+            ORDER BY sm.updated_at DESC
         """).fetchall()]
         turn_rows = [dict(r) for r in conn.execute("""
             SELECT * FROM conversation_turn_metrics

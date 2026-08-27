@@ -327,10 +327,9 @@ function chatMessageHtml(t) {
 
   return parts.map((part, idx) => {
     const avatar = isHuman ? '' : '<div class="agent-mini-avatar">A</div>';
-    const spacer = isHuman ? '' : '<div class="agent-mini-avatar spacer" aria-hidden="true"></div>';
     return `<div class="message-row ${cls}${t.synthetic ? ' synthetic' : ''}">
       <div class="message-sender">${idx === 0 ? label : ''}</div>
-      <div class="message-line">${idx === 0 ? avatar : spacer}<div class="bubble ${cls}">${htmlEscape(part)}</div></div>
+      <div class="message-line">${isHuman ? "" : avatar}<div class="bubble ${cls}">${htmlEscape(part)}</div></div>
       <div class="message-meta">${idx === parts.length - 1 ? htmlEscape(meta) : ''}</div>
     </div>`;
   }).join('');
@@ -1483,9 +1482,13 @@ function renderMetricsTable(sessions) {
   const rows = (sessions || []).slice(0, 120);
   if (!rows.length) return '<p class="muted">No completed/scored conversations yet.</p>';
   return `<div class="table-wrap"><table><thead><tr>
-    <th>Participant</th><th>Topic</th><th>Model</th><th>Context</th><th>Engagement</th><th>Coherence</th><th>Topic</th><th>Novelty</th><th>Q rate</th><th>Turns</th>
+    <th>Participant</th><th>LS</th><th>Block</th><th>Condition</th><th>Conv.</th><th>Topic</th><th>Model</th><th>Context</th><th>Engagement</th><th>Coherence</th><th>Topic</th><th>Novelty</th><th>Q rate</th><th>Turns</th>
   </tr></thead><tbody>${rows.map(s => `<tr>
     <td>${htmlEscape(s.participant_id)}</td>
+    <td>${htmlEscape(String(s.latin_square_sequence || '—'))}</td>
+    <td>${htmlEscape(String(s.condition_order || '—'))}</td>
+    <td><strong>${htmlEscape(s.condition_code || '—')}</strong></td>
+    <td>${htmlEscape(String(s.conversation_within_condition || '—'))}/4</td>
     <td>${htmlEscape(s.topic_id)} (${htmlEscape(s.topic_preference)})</td>
     <td>${htmlEscape(s.model_size)}</td>
     <td>${s.personality_context_enabled ? 'Yes' : 'No'}</td>

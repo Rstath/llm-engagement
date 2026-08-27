@@ -300,6 +300,32 @@ function syntheticOlderMessage(transcript) {
 function visibleTranscript(transcript) {
   return [syntheticOlderMessage(transcript), ...(transcript || [])];
 }
+function conversationContextHtml(assignment = {}) {
+  const scenario = String(assignment.topic_prompt || '').trim();
+  if (!scenario) return '<div class="chat-day-divider">Today</div>';
+  return `<div class="chat-day-divider">Today</div>
+    <div class="scenario-context" role="note" aria-label="Conversation scenario">
+      <div class="scenario-context-label">Scenario</div>
+      <div class="scenario-context-text">${htmlEscape(scenario)}</div>
+    </div>`;
+}
+function renderedChatHtml(transcript, assignment = {}) {
+  const turns = transcript || [];
+  const older = syntheticOlderMessage(turns);
+  return chatMessageHtml(older) + conversationContextHtml(assignment) + turns.map(chatMessageHtml).join('');
+}
+function ensureConversationContextStyles() {
+  if (document.getElementById('conversation-context-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'conversation-context-styles';
+  style.textContent = `
+    .chat-day-divider { text-align:center; font-size:12px; font-weight:600; color:#6b7280; margin:16px 0 10px; }
+    .scenario-context { max-width:82%; margin:0 auto 18px; padding:10px 12px; border-radius:12px; background:rgba(120,120,128,.10); text-align:center; }
+    .scenario-context-label { font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:#6b7280; margin-bottom:4px; }
+    .scenario-context-text { font-size:13px; line-height:1.35; color:inherit; }
+  `;
+  document.head.appendChild(style);
+}
 function chatMessageHtml(t) {
   const isHuman = t.speaker === 'Human' || t.speaker === 'user';
   const cls = isHuman ? 'Human' : 'Agent';
@@ -339,8 +365,8 @@ function scrollToTopAfterRender() {
 }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 const AGENT_TEXT_LIMIT = 90;
-const FOLLOWUP_WAIT_MIN_MS = 650;
-const FOLLOWUP_WAIT_MAX_MS = 1100;
+const FOLLOWUP_WAIT_MIN_MS = 1600;
+const FOLLOWUP_WAIT_MAX_MS = 2300;
 
 function randomBetween(min, max) {
   return Math.floor(min + Math.random() * (max - min + 1));
@@ -357,45 +383,17 @@ function splitAgentText(text, limit = AGENT_TEXT_LIMIT) {
   const clean = cleanAgentBubbleText(text);
   if (!clean) return [];
 
-  if (clean.includes('<split>')) {
-    return clean
-      .split('<split>')
-      .map(part => cleanAgentBubbleText(part))
-      .filter(Boolean)
-      .slice(0, 2);
-  }
+  // Alex should normally send one bubble. Only an explicit <split> produced by
+  // the backend is rendered as two messages; long text is not split cosmetically.
+  if (!clean.includes('<split>')) return [clean];
 
-  if (clean.length <= 135) return [clean];
+  const parts = clean
+    .split('<split>')
+    .map(part => cleanAgentBubbleText(part))
+    .filter(Boolean)
+    .slice(0, 2);
 
-  const words = clean.split(' ');
-  let charCount = 0;
-  let best = -1;
-
-  for (let i = 0; i < words.length - 1; i++) {
-    charCount += words[i].length + (i === 0 ? 0 : 1);
-    if (charCount < 45 || charCount > limit) continue;
-
-    const current = words[i];
-    const next = words[i + 1].toLowerCase().replace(/[^a-z]/g, '');
-    const nextStartsThought = ['also', 'but', 'so', 'maybe', 'tbh', 'idk', 'still', 'plus', 'bc'].includes(next);
-
-    if (/[.!?]$/.test(current) || nextStartsThought) {
-      best = i + 1;
-      break;
-    }
-  }
-
-  if (best < 4) {
-    const cut = clean.slice(0, 135);
-    const lastSpace = cut.lastIndexOf(' ');
-    return [cut.slice(0, lastSpace > 40 ? lastSpace : cut.length).trim()];
-  }
-
-  const first = words.slice(0, best).join(' ').trim();
-  const second = words.slice(best).join(' ').trim();
-
-  if (!second || first.length < 18 || second.length < 12) return [clean];
-  return [first, second.slice(0, 110).trim()].filter(Boolean).slice(0, 2);
+  return parts.length ? parts : [clean.replace(/<split>/g, ' ').trim()];
 }
 
 function readingDelay(userText) {
@@ -1028,6 +1026,7 @@ async function renderChat(err = '') {
     </svg></span><span class="battery"><span class="battery-level"></span></span></span></div>` : '';
 
   const assignment = data.assignment || {};
+  ensureConversationContextStyles();
   const inputHtml = done
     ? `<p class="muted chat-complete">Conversation complete.</p>`
     : `<form class="chat-form" id="chatForm"><div class="message-composer"><textarea id="chatText" rows="1" inputmode="text" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" placeholder="Message"></textarea><button aria-label="Send message" type="submit" class="send-btn" disabled><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="M5.5 11.5L12 5l6.5 6.5"></path></svg></button></div></form>`;
@@ -1040,7 +1039,7 @@ async function renderChat(err = '') {
           <div class="phone-avatar">A</div>
           <div class="phone-title">Alex</div>
         </div>
-        <div class="phone-messages" id="messages">${visibleTranscript(data.transcript).map(chatMessageHtml).join('')}</div>
+        <div class="phone-messages" id="messages">${renderedChatHtml(data.transcript, assignment)}</div>
         ${inputHtml}
       </div>
     </div>
@@ -1187,7 +1186,7 @@ async function renderChat(err = '') {
           const refreshed = await api(`/api/chat/${state.participant}`);
           data.transcript = refreshed.transcript || [];
           data.turns = data.transcript.length;
-          messages.innerHTML = visibleTranscript(data.transcript).map(chatMessageHtml).join('');
+          messages.innerHTML = renderedChatHtml(data.transcript, assignment);
           scrollMessagesToBottom();
         } catch {}
 

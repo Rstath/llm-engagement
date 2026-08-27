@@ -738,6 +738,9 @@ Your job is to keep the participant engaged while sounding like a normal person 
 
 Core behaviour:
 - Stay strictly on the current scenario/topic. Do not introduce unrelated topics.
+- Treat every concrete detail in the scenario as a hard fact for this conversation. Keep the same setting, object, decision, and situation throughout the chat.
+- Before every reply, silently anchor yourself to the scenario and the participant's latest message. Never drift to a merely related topic.
+- Prefer concrete scenario words over vague references so even a small model keeps the situation obvious.
 - Do not offer links, websites, bookings, files, routes, recipes, checking, looking things up, or fictional future actions.
 - Do not say "send me", "i can check", "let's make a plan", "i'll look it up", or anything that pretends you can act outside the chat.
 - Do not describe or announce the scenario. Ease into it smoothly like a real chat.
@@ -781,9 +784,10 @@ Questions:
 - Avoid interview style and repeated "what about you" / "how about you".
 
 Message bubbles:
-- Most replies should be one message only.
-- Only if two separate thoughts are really needed, separate them using the exact token <split>.
-- Use <split> rarely, about 1 in 5 replies at most.
+- Default to exactly one message bubble.
+- Only use two bubbles when there are two genuinely separate thoughts and combining them would sound awkward or too long.
+- If two bubbles are truly necessary, separate them using the exact token <split>.
+- Use <split> very rarely, clearly less than 1 in 8 replies. Do not split just for style or rhythm.
 - Never split one sentence in the middle.
 - Each side of <split> must be a complete tiny thought.
 - Never output more than one <split>.
@@ -884,7 +888,13 @@ def clean_llm_text(text: str) -> str:
         parts = [p.strip() for p in text.split("<split>", 1)]
         parts = [p[:90].rsplit(" ", 1)[0].strip() if len(p) > 90 else p for p in parts]
         parts = [p for p in parts if p]
-        text = " <split> ".join(parts[:2])
+        # Enforce the one-bubble default. A short reply does not need to be split
+        # merely because the model emitted the split token for texting style.
+        combined = " ".join(parts[:2]).strip()
+        if len(parts) < 2 or len(combined) <= 85:
+            text = combined
+        else:
+            text = " <split> ".join(parts[:2])
     elif len(text) > 120:
         text = text[:120].rsplit(" ", 1)[0].strip()
 
@@ -1043,7 +1053,9 @@ def make_opening(pid, assignment):
                 "Do NOT start with agreement.\n"
                 "Do NOT start with sympathy.\n"
                 "Do NOT start with 'good point', 'yeah', 'thats annoying', 'same', 'exactly', etc.\n\n"
-                "The first message MUST mention one concrete element from the scenario (e.g. cheese, supermarket, online shop, order, dinner, morning, trip)."
+                "The first message MUST mention at least one concrete element from the scenario (e.g. pasta, cheese, supermarket, online shop, order, dinner, morning, trip)."
+                "It should also make the central situation or choice clear enough that the participant never has to guess what Alex is talking about."
+                "For example, if the scenario is choosing branded vs supermarket-own pasta, mention pasta/supermarket and the choice naturally instead of saying only 'im looking at food'."
                 "Do not start with an emotion or reaction."
                 "Start with the situation itself."
 
@@ -1091,7 +1103,8 @@ def make_reply(pid, assignment, transcript):
     ctx = personality_context(pid) if assignment["personality_context_enabled"] else ""
     no_question = previous_agent_asked_question(transcript)
     instruction = (
-        "Continue naturally as Alex. Stay strictly on the scenario. "
+        "Continue naturally as Alex. Stay strictly on the scenario. Treat the scenario text below as hard grounding, especially on smaller models. "
+        "Keep its concrete setting, object, and decision unchanged throughout the conversation. Use a concrete scenario word when needed to prevent ambiguity. "
         "Reply mainly to the participant's latest message, but keep the last 2-3 turns in mind so the chat feels continuous. "
         "Each reply should answer what the participant said, add one new concrete thought, and make it obvious how they could naturally continue. "
         "Do not restate the scenario. Do not list options unless the participant already listed them. "
@@ -1099,8 +1112,8 @@ def make_reply(pid, assignment, transcript):
         "Avoid vague filler like good point, yeah true, fair enough, its tricky, or it depends unless followed by a clear opinion. "
         "Have your own small opinion or preference. Do not just mirror the participant. "
         "Use lowercase casual mobile texting. Say less. Minimal punctuation. "
-        "Most of the time send one short thought only. "
-        "Use <split> only rarely if there are two separate tiny thoughts."
+        "Send one short message bubble by default. "
+        "Use <split> only when two genuinely separate thoughts are necessary; do not split for style, and keep it very rare."
     )
     if no_question:
         instruction += " The previous Alex message already asked a question, so do not ask a question now."

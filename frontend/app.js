@@ -614,7 +614,7 @@ function route() {
 function renderConsent() {
   app.innerHTML = `<div class="preview-document pdf-document consent-document">
     <h1>Informed Consent for Study Participation</h1>
-    <p>You are invited to take part in the online study "Using Large Language Models in the evaluation process of input methods for mobile devices". The study is conducted by Roumpini Stathopoulou and overseen by Andreas Komninos at University of Patras. We expect about 30 participants. Data collection is planned from 2026-07-01 to 2026-09-30. Key points:</p>
+    <p>You are invited to take part in the online study "Using Large Language Models in the evaluation process of input methods for mobile devices". The study is conducted by Roumpini Stathopoulou and overseen by Andreas Komninos at University of Patras. We expect about 24 participants. Data collection is planned from 2026-07-01 to 2026-09-30. Key points:</p>
     <ul class="intro-list">
       <li>Participation is voluntary. You may stop at any time without penalty or withdraw your consent</li>
       <li>One session of the online study takes about 60 minutes</li>
@@ -623,7 +623,7 @@ function renderConsent() {
       <li>The study may involve collecting the following data: your input and written notes</li>
       <li>Recordings and research data are processed in accordance with the GDPR. They will be pseudonymized (using a code), stored, analyzed, and published only in summarized form, so that no one outside the research team can link the coded data to you without the key.</li>
     </ul>
-    <p>The alternative is not to take part. If you have questions about the study, the consent process, or your rights as a participant, please contact Andreas Komninos. Please read the following information carefully and take the time you need before deciding.</p>
+    <p>The alternative is not to take part. If you have questions about the study, the consent process, or your rights as a participant, please contact Roumpini Stathopoulou (st1059667@ceid.upatras.gr). Please read the following information carefully and take the time you need before deciding.</p>
 
     <section>
       <h2>1. Purpose and Goal of this Research</h2>

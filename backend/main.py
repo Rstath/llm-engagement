@@ -1,5 +1,6 @@
 import csv
 import hashlib
+import itertools
 import hmac
 import io
 import json
@@ -479,22 +480,85 @@ def get_or_assign_latin_square(pid: str) -> Dict[str, Any]:
         return {"latin_square_sequence": seq_no, "condition_order": list(order)}
 
 
-def build_interest_stimuli(pid: str, interest: str) -> List[Dict[str, str]]:
-    """Build four controlled scenario conversations for one interest level.
+def balanced_variation_pair_schedule(pid: str, interest: str, topic_id: str) -> List[List[str]]:
+    """Return four distinct 2-variation combinations with perfect balance.
 
-    Each participant selected two topics at that interest level. We select two equivalent
-    variations from each topic (2 topics x 2 variations = 4 conversations), then keep this
-    exact four-scenario set stable across all LLM/context conditions of the same interest
-    level. This controls scenario content while the experimental factors change.
+    For a topic with four variations, each of the four same-interest blocks uses two
+    variations. Across those four blocks, every variation appears exactly twice and
+    the pair used in each block is different. The specific balanced combination set
+    and its order are deterministic per participant/topic, so resume/reload cannot
+    change the assignment.
     """
+    variation_ids = list(TOPICS[topic_id]["variations"].keys())
+    if len(variation_ids) != 4:
+        raise RuntimeError(
+            f"Topic {topic_id} must define exactly 4 variations for the balanced block design."
+        )
+
+    # All 2-of-4 pairs. Select a four-pair subset where every variation has degree 2.
+    all_pairs = [tuple(p) for p in itertools.combinations(variation_ids, 2)]
+    balanced_sets = []
+    for pair_set in itertools.combinations(all_pairs, 4):
+        counts = {v: 0 for v in variation_ids}
+        for pair in pair_set:
+            for v in pair:
+                counts[v] += 1
+        if all(counts[v] == 2 for v in variation_ids):
+            balanced_sets.append([list(p) for p in pair_set])
+
+    if not balanced_sets:
+        raise RuntimeError(f"Could not construct balanced variation pairs for {topic_id}.")
+
+    chosen_index = int(
+        stable_choice(
+            f"{pid}:{interest}:{topic_id}:balanced-pair-set",
+            [str(i) for i in range(len(balanced_sets))],
+        )
+    )
+    schedule = balanced_sets[chosen_index]
+
+    # Randomize which balanced pair is used in each successive same-interest block.
+    schedule = shuffled_for_participant(
+        pid, f"{interest}:{topic_id}:balanced-pair-order", schedule
+    )
+
+    # Randomize presentation order within each pair without changing balance.
+    out = []
+    for block_idx, pair in enumerate(schedule, start=1):
+        out.append(
+            shuffled_for_participant(
+                pid,
+                f"{interest}:{topic_id}:pair-{block_idx}:variation-order",
+                pair,
+            )
+        )
+    return out
+
+
+def build_interest_block_stimuli(pid: str, interest: str, interest_block_index: int) -> List[Dict[str, str]]:
+    """Build the four scenarios for one High or Low condition block.
+
+    Each interest level has four condition blocks. For each of the participant's two
+    topics, the block uses two of that topic's four variations. Pair combinations vary
+    across blocks, and after all four same-interest blocks every variation of every topic
+    has appeared exactly twice.
+    """
+    if interest_block_index not in (1, 2, 3, 4):
+        raise RuntimeError(f"Invalid {interest} block index: {interest_block_index}")
+
     prog = get_progress(pid)
-    topics = list(prog.get("most_topics") or []) if interest == "high" else list(prog.get("least_topics") or [])
+    topics = (
+        list(prog.get("most_topics") or [])
+        if interest == "high"
+        else list(prog.get("least_topics") or [])
+    )
     if len(topics) != 2:
         raise HTTPException(400, f"Expected exactly 2 {interest}-interest topics.")
 
     stimuli = []
     for topic_id in topics:
-        variation_ids = shuffled_for_participant(pid, f"{interest}:{topic_id}:stimulus-variations", list(TOPICS[topic_id]["variations"].keys()))[:2]
+        schedule = balanced_variation_pair_schedule(pid, interest, topic_id)
+        variation_ids = schedule[interest_block_index - 1]
         for variation_id in variation_ids:
             stimuli.append({
                 "topic_id": topic_id,
@@ -502,7 +566,12 @@ def build_interest_stimuli(pid: str, interest: str) -> List[Dict[str, str]]:
                 "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
                 "topic_preference": interest,
             })
-    return shuffled_for_participant(pid, f"{interest}:four-stimulus-order", stimuli)
+
+    return shuffled_for_participant(
+        pid,
+        f"{interest}:block-{interest_block_index}:four-stimulus-order",
+        stimuli,
+    )
 
 
 def generate_conversation_assignments(pid: str, reset_existing: bool = False):
@@ -519,9 +588,10 @@ def generate_conversation_assignments(pid: str, reset_existing: bool = False):
       H Medium| Low  | Context No
 
     The participant's condition order is fixed by a persisted balanced Latin-square
-    sequence. Each block contains four controlled scenario conversations. The same four
-    high-interest stimuli are reused across A/B/E/F, and the same four low-interest
-    stimuli across C/D/G/H, isolating LLM size/context from scenario-content changes.
+    sequence. Each block contains four controlled scenario conversations: two variations
+    from each of the participant's two topics at that interest level. Variation pairs are
+    balanced across the four High blocks and independently across the four Low blocks, so
+    every topic variation appears exactly twice overall and pair combinations differ.
     """
     selected_experiment_topics(pid)
 
@@ -563,17 +633,20 @@ def generate_conversation_assignments(pid: str, reset_existing: bool = False):
             conn.commit()
 
     design = get_or_assign_latin_square(pid)
-    stimuli_by_interest = {
-        "high": build_interest_stimuli(pid, "high"),
-        "low": build_interest_stimuli(pid, "low"),
-    }
 
     rows = []
     global_order = 1
+    interest_block_counts = {"high": 0, "low": 0}
     for block_order, condition_code in enumerate(design["condition_order"], start=1):
         cfg = CONDITION_DEFINITIONS[condition_code]
         model_name = SMALL_LLM_MODEL if cfg["model_size"] == "small" else MEDIUM_LLM_MODEL
-        stimuli = stimuli_by_interest[cfg["topic_interest"]]
+
+        interest = cfg["topic_interest"]
+        interest_block_counts[interest] += 1
+        stimuli = build_interest_block_stimuli(
+            pid, interest, interest_block_counts[interest]
+        )
+
         for within_order, stimulus in enumerate(stimuli, start=1):
             rows.append({
                 **stimulus,
@@ -2093,7 +2166,8 @@ def researcher_metrics():
                 a.latin_square_sequence,
                 a.condition_code,
                 a.condition_order,
-                a.conversation_within_condition
+                a.conversation_within_condition,
+                a.variation_id
             FROM conversation_session_metrics sm
             LEFT JOIN conversation_assignments a
               ON sm.session_id = a.session_id

@@ -292,8 +292,8 @@ function scrollToTopAfterRender() {
 }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 const AGENT_TEXT_LIMIT = 90;
-const FOLLOWUP_WAIT_MIN_MS = 3200;
-const FOLLOWUP_WAIT_MAX_MS = 5600;
+const FOLLOWUP_WAIT_MIN_MS = 650;
+const FOLLOWUP_WAIT_MAX_MS = 1100;
 
 function randomBetween(min, max) {
   return Math.floor(min + Math.random() * (max - min + 1));
@@ -353,9 +353,9 @@ function splitAgentText(text, limit = AGENT_TEXT_LIMIT) {
 
 function readingDelay(userText) {
   const chars = String(userText || '').length;
-  const readingMs = chars * randomBetween(65, 105);
-  const reactionMs = randomBetween(1200, 2400);
-  return Math.min(7600, Math.max(2200, readingMs + reactionMs));
+  const readingMs = chars * randomBetween(8, 14);
+  const reactionMs = randomBetween(250, 550);
+  return Math.min(1200, Math.max(350, readingMs + reactionMs));
 }
 
 function writingDelay(agentText) {
@@ -367,7 +367,7 @@ function writingDelay(agentText) {
 
 function followupWaitDelay(userText) {
   const chars = String(userText || '').length;
-  const extra = Math.min(1400, chars * 10);
+  const extra = Math.min(350, chars * 3);
   return randomBetween(FOLLOWUP_WAIT_MIN_MS, FOLLOWUP_WAIT_MAX_MS) + extra;
 }
 

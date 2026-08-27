@@ -220,7 +220,7 @@ function showDesktopOnlyModal() {
       <div class="modal-content desktop-only-modal-content">
         <div class="modal-body desktop-only-modal-body">
           <div class="desktop-only-icon" aria-hidden="true">🖥️</div>
-          <h2 id="desktop-only-title">Please use a desktop computer</h2>
+          <h2 id="desktop-only-title">Please use a desktop</h2>
           <p>This study is designed to be completed on a desktop or laptop computer.</p>
           <p class="muted">Please reopen this page on a desktop device to continue.</p>
         </div>
@@ -670,7 +670,8 @@ function renderConsent() {
         <li>Read the study information and provide informed consent.</li>
         <li>Complete a short demographic questionnaire and the Big Five personality questionnaire.</li>
         <li>Select the conversation topics according to your preferences.</li>
-        <li>Complete 16 short mobile-style conversations with AI conversational agents.</li>
+        <li>Complete 32 short mobile-style conversations with an AI conversational partner, organized into 8 sets of 4 conversations.</li>
+        <li>After each set of 4 conversations, complete a short questionnaire about that set of interactions.</li>
         <li>Complete a short questionnaire after each conversation about that interaction.</li>
         <li>Review the completion page and finish participation.</li>
       </ol>
@@ -748,7 +749,8 @@ function renderInstructions() {
         <ul>
           <li>Complete a few short questionnaires.</li>
           <li>Select conversation topics based on your preferences.</li>
-          <li>Participate in 16 short mobile-style text conversations with an AI conversational partner.</li>
+          <li>Participate in 32 short mobile-style text conversations with an AI conversational partner, organized into 8 sets of 4 conversations.</li>
+          <li>After each set of 4 conversations, complete a short questionnaire about those interactions.</li>
           <li>Complete a short questionnaire immediately after each conversation.</li>
         </ul>
         <p class="muted">The study takes approximately 45–60 minutes in total.</p>
@@ -1129,24 +1131,16 @@ async function renderChat(err = '') {
         if (formEl) formEl.outerHTML = `<p class="muted chat-complete">Conversation complete.</p>`;
 
         if (!document.getElementById('finish')) {
-          const label = result.all_done ? 'Go to questionnaire' : 'Next conversation';
+          const label = result.block_complete ? 'Go to questionnaire' : 'Next conversation';
           app.insertAdjacentHTML('beforeend', actions(`<button id="finish">${label}</button>`));
         }
 
         const finishBtn = document.getElementById('finish');
         if (finishBtn) {
-          finishBtn.textContent = result.all_done ? 'Go to questionnaire' : 'Next conversation';
+          finishBtn.textContent = result.block_complete ? 'Go to questionnaire' : 'Next conversation';
           finishBtn.onclick = async () => {
-            if (result.all_done) {
-              const progress = await api(`/api/session`, {
-                method: 'POST',
-                body: JSON.stringify({ participant_id: state.participant })
-              });
-              renderProgressFromServer(progress);
-            } else {
-              const progress = await api(`/api/finish/${state.participant}`, { method: 'POST' });
-              renderProgressFromServer(progress);
-            }
+            const progress = await api(`/api/finish/${state.participant}`, { method: 'POST' });
+            renderProgressFromServer(progress);
           };
         }
       } else {
@@ -1233,13 +1227,10 @@ async function renderChat(err = '') {
 
   const finish = document.getElementById('finish');
   if (finish) {
-    // Every completed conversation is followed immediately by its own questionnaire.
-    finish.textContent = 'Go to questionnaire';
+    const endsConditionBlock = Number(assignment.conversation_within_condition || 0) >= Number(assignment.conversations_per_condition || 4);
+    finish.textContent = endsConditionBlock ? 'Go to questionnaire' : 'Next conversation';
     finish.onclick = async () => {
-      const progress = await api(`/api/session`, {
-        method: 'POST',
-        body: JSON.stringify({ participant_id: state.participant })
-      });
+      const progress = await api(`/api/finish/${state.participant}`, { method: 'POST' });
       renderProgressFromServer(progress);
     };
   }
@@ -1292,19 +1283,19 @@ function renderPostQuestionnaire(errors = {}) {
   const selectedEmotions = [];
   const emotionOptions = ['Interested', 'Engaged', 'Curious', 'Comfortable', 'Neutral', 'Confused', 'Bored', 'Frustrated'];
 
-  app.innerHTML = `<h2>Conversation questionnaire</h2>
-    <p class="muted">Please rate the conversation you just completed. Your answers are linked only to that conversation and its experimental condition.</p>
+  app.innerHTML = `<h2>Conversation set questionnaire</h2>
+    <p class="muted">Please rate your experience across the four conversations you just completed. Think about the set as a whole when answering.</p>
 
-    ${likertRow('post_engagement', 'The conversation was engaging.', saved.engagement, errors)}
-    ${likertRow('post_naturalness', 'The AI messages felt natural.', saved.naturalness, errors)}
-    ${likertRow('post_responsiveness', 'The AI responded appropriately to what I wrote.', saved.responsiveness, errors)}
-    ${likertRow('post_coherence', 'The conversation flowed coherently.', saved.coherence, errors)}
-    ${likertRow('post_topic_consistency', 'The conversation stayed on topic.', saved.topic_consistency, errors)}
-    ${likertRow('post_willingness_continue', 'I would be willing to continue chatting with this AI.', saved.willingness_continue, errors)}
-    ${likertRow('post_overall_satisfaction', 'Overall, I was satisfied with the interaction experience.', saved.overall_satisfaction, errors)}
+    ${likertRow('post_engagement', 'The conversations were engaging.', saved.engagement, errors)}
+    ${likertRow('post_naturalness', 'The AI messages felt natural across these conversations.', saved.naturalness, errors)}
+    ${likertRow('post_responsiveness', 'The AI responded appropriately to what I wrote across these conversations.', saved.responsiveness, errors)}
+    ${likertRow('post_coherence', 'The conversations flowed coherently.', saved.coherence, errors)}
+    ${likertRow('post_topic_consistency', 'The conversations stayed on topic.', saved.topic_consistency, errors)}
+    ${likertRow('post_willingness_continue', 'I would be willing to continue chatting with this AI after these conversations.', saved.willingness_continue, errors)}
+    ${likertRow('post_overall_satisfaction', 'Overall, I was satisfied with this set of interactions.', saved.overall_satisfaction, errors)}
 
     <div class="section compact post-item">
-      <strong>How did you feel during this conversation?</strong>
+      <strong>How did you feel during these conversations?</strong>
       <p class="muted">Select any that apply.</p>
       <div class="checkbox-grid">
         ${emotionOptions.map(emotion => `<label><input type="checkbox" name="post_emotion" value="${htmlEscape(emotion)}" ${selectedEmotions.includes(emotion) ? 'checked' : ''}> ${htmlEscape(emotion)}</label>`).join('')}
@@ -1437,7 +1428,8 @@ function renderStatisticalTests(stats) {
   const rows = [
     ['Medium vs small engagement', tests.model_medium_vs_small_engagement],
     ['Context vs no context engagement', tests.context_vs_no_context_engagement],
-    ['Topic effect on engagement', tests.topic_effect_engagement],
+    ['Topic interest: high vs low engagement', tests.topic_interest_high_vs_low_engagement],
+    ['Individual topic effect on engagement', tests.topic_effect_engagement],
   ];
   return `<div class="table-wrap"><table><thead><tr><th>Comparison</th><th>Test</th><th>n</th><th>Statistic</th><th>p</th><th>Effect</th><th>Note</th></tr></thead>
     <tbody>${rows.map(([label, t]) => `<tr><td>${htmlEscape(label)}</td><td>${htmlEscape(t?.test || '')}</td><td>${htmlEscape(String(t?.n ?? ''))}</td><td>${t?.statistic === null || t?.statistic === undefined ? '—' : htmlEscape(dec(t.statistic))}</td><td>${htmlEscape(fmtP(t?.p))}</td><td>${t?.effect_size_r === null || t?.effect_size_r === undefined ? '—' : htmlEscape(dec(t.effect_size_r))}</td><td>${htmlEscape(t?.note || '')}</td></tr>`).join('')}</tbody></table></div>`;
@@ -1575,6 +1567,22 @@ async function renderResearcherDashboard(err = '') {
   const m = st.matrices || {};
   const d = st.distributions || {};
 
+  const ls = data.latin_square_balance || [];
+  const lsSummary = data.latin_square_summary || {};
+  const latinSquareBalanceTable = () => {
+    if (!ls.length) return '<div class="dashboard-note">No Latin-square assignments have been created yet.</div>';
+    const rows = ls.map(r => {
+      const status = Number(r.assigned) === Number(r.target) ? 'Complete' : (Number(r.assigned) < Number(r.target) ? 'Open' : 'Over target');
+      return `<tr>
+        <td>LS${htmlEscape(r.sequence)}</td>
+        <td>${htmlEscape((r.order || []).join(' → '))}</td>
+        <td>${htmlEscape(r.assigned)} / ${htmlEscape(r.target)}</td>
+        <td>${htmlEscape(status)}</td>
+      </tr>`;
+    }).join('');
+    return `<div class="table-wrap"><table class="compact-table"><thead><tr><th>Sequence</th><th>Condition order</th><th>Assigned</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  };
+
   app.innerHTML = `${researcherDashboardStyles()}<h2>Researcher dashboard</h2>${err ? errorBox(err) : ''}
     <div class="actions">
       <button id="createCodes">Create participant codes</button>
@@ -1596,6 +1604,8 @@ async function renderResearcherDashboard(err = '') {
       <h3>Overview</h3>
       <div class="metrics-grid">
         ${metricCard('Participants', String(s.participants || data.participants.length || 0))}
+        ${metricCard('Latin-square assigned', `${lsSummary.assigned_total || 0} / ${lsSummary.target_total || 24}`, lsSummary.currently_balanced ? 'Balanced so far' : 'Check allocation')}
+        ${metricCard('Target per sequence', String(lsSummary.target_per_sequence || 3), lsSummary.complete_and_balanced ? '24/24 perfectly balanced' : '8 sequences total')}
         ${metricCard('Completed participants', String(s.completed_participants || 0), pct(s.participant_completion_rate || 0))}
         ${metricCard('Scored conversations', String(s.total_scored_conversations || 0))}
         ${metricCard('Engagement score', dec(s.avg_engagement_score), 'Weighted overall metric')}
@@ -1604,9 +1614,14 @@ async function renderResearcherDashboard(err = '') {
         ${metricCard('Novelty', dec(s.avg_novelty), '1 - previous similarity')}
         ${metricCard('Question rate', dec(s.avg_question_rate), 'Question-bearing turns')}
       </div>
+      <h3>Latin Square Balance</h3>
+      <div class="dashboard-note"><strong>${lsSummary.currently_balanced ? 'Balanced allocation in progress.' : 'Allocation warning.'}</strong> Each of the 8 sequences must reach exactly 3 assigned participants when all 24 participants have entered the experiment.</div>
+      ${latinSquareBalanceTable()}
       <div class="charts-grid">
         ${groupedMetricTable('Model comparison', m.model_metrics)}
         ${groupedMetricTable('Personality context comparison', m.context_metrics)}
+        ${groupedMetricTable('Topic interest comparison', m.topic_interest_metrics)}
+        ${barChart('Engagement by topic interest', c.engagement_by_topic_interest, 'High vs low interest')}
         ${barChart('Engagement by topic', c.engagement_by_topic, 'Average score')}
         ${histogramChart('Engagement distribution', c.engagement_histogram || d.engagement_histogram)}
       </div>
@@ -1617,12 +1632,14 @@ async function renderResearcherDashboard(err = '') {
       <div class="charts-grid">
         ${barChart('Engagement by model size', c.engagement_by_model, 'Higher is better')}
         ${barChart('Engagement by personality context', c.engagement_by_context, '0=false · 1=true')}
+        ${barChart('Engagement by topic interest', c.engagement_by_topic_interest, 'High vs low')}
         ${barChart('Coherence by model size', c.coherence_by_model, 'Average consecutive similarity')}
         ${barChart('Topic consistency by topic', c.topic_consistency_by_topic, 'Average prompt similarity')}
         ${barChart('Question rate by model', c.question_rate_by_model, 'Lower is not always better')}
         ${barChart('Token balance by model', c.token_balance_by_model, 'Closer to 1 is more balanced')}
         ${boxPlotTable('Engagement box summary by model', d.engagement_box_by_model)}
         ${boxPlotTable('Engagement box summary by context', d.engagement_box_by_context)}
+        ${boxPlotTable('Engagement box summary by topic interest', d.engagement_box_by_topic_interest)}
         ${heatmapTable(m.topic_context_heatmap)}
       </div>
       <h3>Conversation-level table</h3>
@@ -1633,7 +1650,7 @@ async function renderResearcherDashboard(err = '') {
       <h3>Descriptive statistics</h3>
       ${renderStatsTable(st.descriptives || {})}
       <h3>Statistical tests</h3>
-      <p class="muted">Wilcoxon signed-rank is used for within-participant model/context comparisons. Friedman is used for repeated topic comparisons. P-values are approximate when SciPy is not installed.</p>
+      <p class="muted">Wilcoxon signed-rank is used for within-participant LLM-size, context, and high-vs-low topic-interest comparisons. Friedman is retained for exploratory comparisons across individual topic IDs. P-values are approximate when SciPy is not installed.</p>
       ${renderStatisticalTests(st)}
       <h3>Big Five correlations</h3>
       <p class="muted">Spearman correlations compare participant Big Five scores with mean engagement score.</p>
@@ -1659,7 +1676,7 @@ async function renderResearcherDashboard(err = '') {
       <h3>Participants</h3>
       <div class="table-wrap"><table><thead><tr><th>Participant</th><th>Access code</th><th>Created</th><th>Step</th><th>Completed</th></tr></thead><tbody>${data.participants.map(p => `<tr><td>${htmlEscape(p.participant_id)}</td><td title="${htmlEscape(p.access_code ? 'Code hidden for privacy' : '')}">${htmlEscape(maskAccessCode(p.access_code || ''))}</td><td>${htmlEscape(p.created_at)}</td><td>${htmlEscape(p.current_step)}</td><td>${p.completed ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table></div>
       <h3>Exports</h3>
-      <p class="muted">The CSV export includes participant metadata, per-conversation questionnaire answers, conversation transcripts, turn metrics, embedding-derived similarities, and session-level engagement scores.</p>
+      <p class="muted">The CSV export includes Latin-square sequence and condition metadata, post-condition questionnaire answers, conversation transcripts, turn metrics, embedding-derived similarities, and conversation-level engagement scores.</p>
     </section>`;
 
   document.querySelectorAll('.dashboard-tab').forEach(tab => {
@@ -1699,7 +1716,7 @@ async function renderResearcherDashboard(err = '') {
       const box = document.getElementById('createdCodes');
       box.innerHTML = `<div class="section">
         <h3>New participant codes</h3>
-        <p class="muted">Copy these now and email one code to each participant.</p>
+        <p class="muted">Copy these codes and give one code to each supervised participant.</p>
         <textarea readonly rows="8">${htmlEscape((data.codes || []).map(c => c.access_code).join('\n'))}</textarea>
       </div>`;
     } catch (e) {

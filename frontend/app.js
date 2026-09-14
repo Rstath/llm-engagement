@@ -67,13 +67,24 @@ function renderProgressFromServer(progress) {
 function saveParticipant(id) { localStorage.setItem('participant_id', id); }
 function saveAccessCode(code) { if (code) localStorage.setItem('participant_access_code', code); }
 function clearParticipantSession() {
+  // Logout must never delete experiment progress. All study progress is stored
+  // server-side and is restored when the same participant code is used again.
+  // We only end the active browser session here.
   localStorage.removeItem('participant_id');
   localStorage.removeItem('participant_access_code');
   state.participant = null;
   state.progress = null;
   state.hadExistingParticipant = false;
   document.querySelectorAll('.resume-modal-backdrop').forEach(el => el.remove());
+  if (participantLabel) participantLabel.textContent = '';
   renderParticipantLogin();
+}
+
+function clearResearcherSession() {
+  // Researcher logout removes only the authentication token. Participant
+  // records and generated access codes live in the persistent database.
+  localStorage.removeItem('researcher_token');
+  renderResearcherLogin();
 }
 function setProgress(progress) {
   state.progress = progress;
@@ -1641,6 +1652,7 @@ async function renderResearcherDashboard(err = '') {
     <div class="actions">
       <button id="createCodes">Create participant codes</button>
       <a href="${API}/api/researcher/export.csv" id="exportLink">Download CSV export</a>
+      <button id="researcherLogout" type="button">Log out</button>
     </div>
     <h3>Participant codes</h3>
     <p class="muted">All generated participant codes are stored on the server and remain visible here. New codes are appended to this list.</p>
@@ -1744,6 +1756,8 @@ async function renderResearcherDashboard(err = '') {
       if (panel) panel.classList.add('active');
     });
   });
+
+  document.getElementById('researcherLogout').onclick = clearResearcherSession;
 
   document.getElementById('createCodes').onclick = async () => {
     const raw = prompt('How many participant codes should I create?', '10');

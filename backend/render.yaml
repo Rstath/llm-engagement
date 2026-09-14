@@ -2,11 +2,20 @@ services:
   - type: web
     name: llm-engagement-backend
     runtime: python
-    plan: free
+    # Persistent disks are required so participant progress and researcher-created
+    # access codes survive restarts/redeploys. Render free instances do not provide
+    # durable local disk storage, so use a paid instance that supports disks.
+    plan: starter
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    disk:
+      name: llm-engagement-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
+      - key: DB_PATH
+        value: /var/data/human_experiment_data.db
       - key: APP_SECRET
         generateValue: true
       - key: RESEARCHER_PASSWORD

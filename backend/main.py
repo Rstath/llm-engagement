@@ -5,6 +5,7 @@ import io
 import json
 import math
 import os
+from pathlib import Path
 import re
 import random
 import sqlite3
@@ -111,8 +112,15 @@ def now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 def connect():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    # Ensure the database directory exists when DB_PATH points at a mounted
+    # persistent disk (for example /var/data on Render).
+    db_file = Path(DB_PATH).expanduser()
+    if db_file.parent and str(db_file.parent) not in ('', '.'):
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_file), check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA foreign_keys=ON')
     return conn
 
 def init_db():

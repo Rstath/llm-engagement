@@ -80,7 +80,7 @@ SMALL_LLM_MODEL=google/gemma-3-4b-it
 MEDIUM_LLM_MODEL=google/gemma-4-31b-it
 DEFAULT_TEMPERATURE=0.7
 DEFAULT_MAX_AGENT_TOKENS=130
-TARGET_TOTAL_TURNS=14
+TARGET_TOTAL_TURNS=12
 ```
 
 Deploy and copy your Render URL, for example:

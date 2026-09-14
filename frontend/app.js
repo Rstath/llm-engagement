@@ -683,8 +683,8 @@ function renderConsent() {
         <li>Read the study information and provide informed consent.</li>
         <li>Complete a short demographic questionnaire and the Big Five personality questionnaire.</li>
         <li>Select the conversation topics according to your preferences.</li>
-        <li>Complete 32 short mobile-style conversations with an AI conversational partner, organized into 8 sets of 4 conversations.</li>
-        <li>After each set of 4 conversations, complete a short questionnaire about that set of interactions.</li>
+        <li>Complete 16 short mobile-style conversations with an AI conversational partner, organized into 8 sets of 2 conversations.</li>
+        <li>After each set of 2 conversations, complete a short questionnaire about that set of interactions.</li>
         <li>Complete a short questionnaire after each conversation about that interaction.</li>
         <li>Review the completion page and finish participation.</li>
       </ol>
@@ -762,8 +762,8 @@ function renderInstructions() {
         <ul>
           <li>Complete a few short questionnaires.</li>
           <li>Select conversation topics based on your preferences.</li>
-          <li>Participate in 32 short mobile-style text conversations with an AI conversational partner, organized into 8 sets of 4 conversations.</li>
-          <li>After each set of 4 conversations, complete a short questionnaire about those interactions.</li>
+          <li>Participate in 16 short mobile-style text conversations with an AI conversational partner, organized into 8 sets of 2 conversations.</li>
+          <li>After each set of 2 conversations, complete a short questionnaire about those interactions.</li>
           <li>Complete a short questionnaire immediately after each conversation.</li>
         </ul>
         <p class="muted">The study takes approximately 45–60 minutes in total.</p>
@@ -954,8 +954,8 @@ function renderBig5(err = '') {
 function topicCards(selected, excluded = []) {
   const topics = state.meta.topics;
   const ids = Object.keys(topics).filter(id => !excluded.includes(id));
-  const maxed = selected.length >= 2;
-  return `<p class="muted">Selected ${selected.length} / 2</p><div class="topic-grid">${ids.map(id => {
+  const maxed = selected.length >= 1;
+  return `<p class="muted">Selected ${selected.length} / 1</p><div class="topic-grid">${ids.map(id => {
     const t = topics[id];
     const checked = selected.includes(id);
     const disabled = maxed && !checked;
@@ -964,25 +964,25 @@ function topicCards(selected, excluded = []) {
 }
 function getCheckedTopics() { return [...document.querySelectorAll('input[name="topic"]:checked')].map(x => x.value); }
 function renderTopicsMost(err = '') {
-  const selected = loadDraft('most_interesting_topics', state.progress.most_topics || []);
-  app.innerHTML = `<h2>Select the 2 topics you find most interesting</h2><p>Choose exactly 2 topics:</p>${topicCards(selected)}${err ? errorBox(err) : ''}` + actions('<button id="continue" disabled>Continue</button>');
+  const selected = loadDraft('most_interesting_topics', state.progress.most_topics || []).slice(0, 1);
+  app.innerHTML = `<h2>Select the topic you find most interesting</h2><p>Choose exactly 1 topic:</p>${topicCards(selected)}${err ? errorBox(err) : ''}` + actions('<button id="continue" disabled>Continue</button>');
   const btn = document.getElementById('continue');
   function refresh() { const now = getCheckedTopics(); saveDraft('most_interesting_topics', now); renderTopicsMost(err); }
   document.querySelectorAll('input[name="topic"]').forEach(cb => cb.addEventListener('change', refresh));
-  btn.disabled = selected.length !== 2;
+  btn.disabled = selected.length !== 1;
   btn.onclick = () => renderTopicsLeast(selected, '', true);
 }
 function renderTopicsLeast(most, err = '', shouldScrollTop = false) {
   if (shouldScrollTop) scrollToTopAfterRender();
-  const savedLeast = loadDraft('least_interesting_topics', state.progress.least_topics || []).filter(id => !most.includes(id));
-  app.innerHTML = `<h2>Select the 2 topics you find least interesting</h2><p>Choose exactly 2 topics. Your two most-interesting topics are removed from this list.</p>${topicCards(savedLeast, most)}${err ? errorBox(err) : ''}` + actions('<button class="secondary" id="back">Back</button><button id="continue" disabled>Start conversations</button>');
+  const savedLeast = loadDraft('least_interesting_topics', state.progress.least_topics || []).filter(id => !most.includes(id)).slice(0, 1);
+  app.innerHTML = `<h2>Select the topic you find least interesting</h2><p>Choose exactly 1 topic. Your most-interesting topic is removed from this list.</p>${topicCards(savedLeast, most)}${err ? errorBox(err) : ''}` + actions('<button class="secondary" id="back">Back</button><button id="continue" disabled>Start conversations</button>');
   const btn = document.getElementById('continue');
   function refresh() { const now = getCheckedTopics(); saveDraft('least_interesting_topics', now); renderTopicsLeast(most, err); }
   document.querySelectorAll('input[name="topic"]').forEach(cb => cb.addEventListener('change', refresh));
-  btn.disabled = savedLeast.length !== 2;
+  btn.disabled = savedLeast.length !== 1;
   document.getElementById('back').onclick = () => { renderTopicsMost(); scrollToTopAfterRender(); };
   btn.onclick = async () => {
-    if (savedLeast.length !== 2) return renderTopicsLeast(most, new Error('Please select exactly 2 topics.'));
+    if (savedLeast.length !== 1) return renderTopicsLeast(most, new Error('Please select exactly 1 topic.'));
     try {
       setProgress(await api('/api/topics', { method: 'POST', body: JSON.stringify({ participant_id: state.participant, most_topics: most, least_topics: savedLeast }) }));
       clearDraft('most_interesting_topics'); clearDraft('least_interesting_topics');
@@ -1320,7 +1320,7 @@ function renderPostQuestionnaire(errors = {}) {
   const emotionOptions = ['Interested', 'Engaged', 'Curious', 'Comfortable', 'Neutral', 'Confused', 'Bored', 'Frustrated'];
 
   app.innerHTML = `<h2>Conversation set questionnaire</h2>
-    <p class="muted">Please rate your experience across the four conversations you just completed. Think about the set as a whole when answering.</p>
+    <p class="muted">Please rate your experience across the two conversations you just completed. Think about the set as a whole when answering.</p>
 
     ${likertRow('post_engagement', 'The conversations were engaging.', saved.engagement, errors)}
     ${likertRow('post_naturalness', 'The AI messages felt natural across these conversations.', saved.naturalness, errors)}

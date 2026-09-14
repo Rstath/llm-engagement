@@ -1,6 +1,5 @@
 import csv
 import hashlib
-import itertools
 import hmac
 import io
 import json
@@ -41,7 +40,7 @@ SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "google/gemma-3-4b-it")
 MEDIUM_LLM_MODEL = os.getenv("MEDIUM_LLM_MODEL", "google/gemma-4-31b-it")
 DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.9"))
 DEFAULT_MAX_AGENT_TOKENS = int(os.getenv("DEFAULT_MAX_AGENT_TOKENS", "70"))
-TARGET_TOTAL_TURNS = int(os.getenv("TARGET_TOTAL_TURNS", "14"))
+TARGET_TOTAL_TURNS = int(os.getenv("TARGET_TOTAL_TURNS", "12"))
 
 LATIN_SQUARE = [
     ["A","B","H","C","G","D","F","E"],
@@ -63,7 +62,7 @@ CONDITION_DEFINITIONS = {
     "G": {"model_size":"medium", "topic_interest":"low",  "context":True},
     "H": {"model_size":"medium", "topic_interest":"low",  "context":False},
 }
-CONVERSATIONS_PER_CONDITION = 4
+CONVERSATIONS_PER_CONDITION = 2
 TOTAL_CONDITIONS = 8
 TOTAL_CONVERSATIONS = TOTAL_CONDITIONS * CONVERSATIONS_PER_CONDITION
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
@@ -152,7 +151,7 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'active'
         );
 
-        -- Experimental architecture: 8 Latin-square condition blocks x 4 conversations = 32 conversations.
+        -- Experimental architecture: 8 Latin-square condition blocks x 2 conversations = 16 conversations.
         CREATE TABLE IF NOT EXISTS conversation_assignments (
             session_id TEXT PRIMARY KEY,
             participant_id TEXT NOT NULL,
@@ -427,12 +426,12 @@ def shuffled_for_participant(pid: str, salt: str, values: List[Any]) -> List[Any
 
 
 def selected_experiment_topics(pid: str) -> List[str]:
-    """Return exactly the 4 participant-selected topics: 2 high-interest + 2 low-interest."""
+    """Return exactly 2 participant-selected topics: 1 high-interest + 1 low-interest."""
     prog = get_progress(pid)
     high = list(dict.fromkeys(prog.get("most_topics") or []))
     low = list(dict.fromkeys(prog.get("least_topics") or []))
-    if len(high) != 2 or len(low) != 2 or set(high) & set(low):
-        raise HTTPException(400, "Participant must select exactly 2 high-interest and 2 low-interest topics before assignment.")
+    if len(high) != 1 or len(low) != 1 or set(high) & set(low):
+        raise HTTPException(400, "Participant must select exactly 1 high-interest and 1 low-interest topic before assignment.")
     return high + low
 
 
@@ -480,68 +479,28 @@ def get_or_assign_latin_square(pid: str) -> Dict[str, Any]:
         return {"latin_square_sequence": seq_no, "condition_order": list(order)}
 
 
-def balanced_variation_pair_schedule(pid: str, interest: str, topic_id: str) -> List[List[str]]:
-    """Return four distinct 2-variation combinations with perfect balance.
+def selected_variations_for_topic(pid: str, interest: str, topic_id: str) -> List[str]:
+    """Select exactly two equivalent variations for one selected topic.
 
-    For a topic with four variations, each of the four same-interest blocks uses two
-    variations. Across those four blocks, every variation appears exactly twice and
-    the pair used in each block is different. The specific balanced combination set
-    and its order are deterministic per participant/topic, so resume/reload cannot
-    change the assignment.
+    The choice is deterministic per participant/topic, so refresh/resume cannot change it.
+    The same two variations are reused across all four model/context conditions for that
+    interest level. This keeps the scenario content controlled when comparing conditions.
     """
     variation_ids = list(TOPICS[topic_id]["variations"].keys())
-    if len(variation_ids) != 4:
-        raise RuntimeError(
-            f"Topic {topic_id} must define exactly 4 variations for the balanced block design."
-        )
-
-    # All 2-of-4 pairs. Select a four-pair subset where every variation has degree 2.
-    all_pairs = [tuple(p) for p in itertools.combinations(variation_ids, 2)]
-    balanced_sets = []
-    for pair_set in itertools.combinations(all_pairs, 4):
-        counts = {v: 0 for v in variation_ids}
-        for pair in pair_set:
-            for v in pair:
-                counts[v] += 1
-        if all(counts[v] == 2 for v in variation_ids):
-            balanced_sets.append([list(p) for p in pair_set])
-
-    if not balanced_sets:
-        raise RuntimeError(f"Could not construct balanced variation pairs for {topic_id}.")
-
-    chosen_index = int(
-        stable_choice(
-            f"{pid}:{interest}:{topic_id}:balanced-pair-set",
-            [str(i) for i in range(len(balanced_sets))],
-        )
+    if len(variation_ids) < 2:
+        raise RuntimeError(f"Topic {topic_id} must define at least 2 variations.")
+    randomized = shuffled_for_participant(
+        pid, f"{interest}:{topic_id}:selected-two-variations", variation_ids
     )
-    schedule = balanced_sets[chosen_index]
-
-    # Randomize which balanced pair is used in each successive same-interest block.
-    schedule = shuffled_for_participant(
-        pid, f"{interest}:{topic_id}:balanced-pair-order", schedule
-    )
-
-    # Randomize presentation order within each pair without changing balance.
-    out = []
-    for block_idx, pair in enumerate(schedule, start=1):
-        out.append(
-            shuffled_for_participant(
-                pid,
-                f"{interest}:{topic_id}:pair-{block_idx}:variation-order",
-                pair,
-            )
-        )
-    return out
+    return randomized[:2]
 
 
 def build_interest_block_stimuli(pid: str, interest: str, interest_block_index: int) -> List[Dict[str, str]]:
-    """Build the four scenarios for one High or Low condition block.
+    """Build the two scenarios for one High or Low condition block.
 
-    Each interest level has four condition blocks. For each of the participant's two
-    topics, the block uses two of that topic's four variations. Pair combinations vary
-    across blocks, and after all four same-interest blocks every variation of every topic
-    has appeared exactly twice.
+    Each participant has one topic for each interest level. Exactly two equivalent
+    variations are selected for that topic and reused in every same-interest condition
+    (Small/Medium x Context Yes/No). Only their presentation order is varied by block.
     """
     if interest_block_index not in (1, 2, 3, 4):
         raise RuntimeError(f"Invalid {interest} block index: {interest_block_index}")
@@ -552,30 +511,29 @@ def build_interest_block_stimuli(pid: str, interest: str, interest_block_index: 
         if interest == "high"
         else list(prog.get("least_topics") or [])
     )
-    if len(topics) != 2:
-        raise HTTPException(400, f"Expected exactly 2 {interest}-interest topics.")
+    if len(topics) != 1:
+        raise HTTPException(400, f"Expected exactly 1 {interest}-interest topic.")
 
-    stimuli = []
-    for topic_id in topics:
-        schedule = balanced_variation_pair_schedule(pid, interest, topic_id)
-        variation_ids = schedule[interest_block_index - 1]
-        for variation_id in variation_ids:
-            stimuli.append({
-                "topic_id": topic_id,
-                "variation_id": variation_id,
-                "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
-                "topic_preference": interest,
-            })
-
-    return shuffled_for_participant(
+    topic_id = topics[0]
+    variation_ids = selected_variations_for_topic(pid, interest, topic_id)
+    variation_ids = shuffled_for_participant(
         pid,
-        f"{interest}:block-{interest_block_index}:four-stimulus-order",
-        stimuli,
+        f"{interest}:{topic_id}:condition-block-{interest_block_index}:variation-order",
+        variation_ids,
     )
 
+    return [
+        {
+            "topic_id": topic_id,
+            "variation_id": variation_id,
+            "topic_prompt": TOPICS[topic_id]["variations"][variation_id],
+            "topic_preference": interest,
+        }
+        for variation_id in variation_ids
+    ]
 
 def generate_conversation_assignments(pid: str, reset_existing: bool = False):
-    """Create 32 conversations as 8 Latin-square condition blocks x 4 conversations.
+    """Create 16 conversations as 8 Latin-square condition blocks x 2 conversations.
 
     Conditions:
       A Small | High | Context Yes
@@ -588,10 +546,10 @@ def generate_conversation_assignments(pid: str, reset_existing: bool = False):
       H Medium| Low  | Context No
 
     The participant's condition order is fixed by a persisted balanced Latin-square
-    sequence. Each block contains four controlled scenario conversations: two variations
-    from each of the participant's two topics at that interest level. Variation pairs are
-    balanced across the four High blocks and independently across the four Low blocks, so
-    every topic variation appears exactly twice overall and pair combinations differ.
+    sequence. Each block contains two controlled scenario conversations using the same
+    two equivalent variations of the participant's single topic at that interest level.
+    Reusing those variations across Small/Medium and Context Yes/No keeps content controlled
+    for the condition comparisons.
     """
     selected_experiment_topics(pid)
 
@@ -615,7 +573,7 @@ def generate_conversation_assignments(pid: str, reset_existing: bool = False):
                 f"SELECT COUNT(*) FROM conversation_turns WHERE session_id IN ({placeholders})", session_ids
             ).fetchone()[0] if session_ids else 0
             if turn_count:
-                raise HTTPException(409, "Legacy experiment assignments with conversation data were found for this participant. Preserve/export those data, then reset the participant before using the new 32-conversation Latin-square design.")
+                raise HTTPException(409, "Legacy experiment assignments with conversation data were found for this participant. Preserve/export those data, then reset the participant before using the new 16-conversation Latin-square design.")
             reset_existing = True
         if reset_existing:
             session_rows = conn.execute(
@@ -694,7 +652,7 @@ def count_assignments(pid: str) -> Dict[str, int]:
 
 
 def pending_condition_questionnaire(pid: str):
-    """Return the earliest fully completed 4-conversation block without its questionnaire."""
+    """Return the earliest fully completed 2-conversation block without its questionnaire."""
     with connect() as conn:
         row = conn.execute(
             """
@@ -1876,7 +1834,7 @@ def big5(data: Big5In):
 
 @app.post("/api/topics")
 def topics(data: TopicsIn):
-    if len(data.most_topics) != 2 or len(data.least_topics) != 2: raise HTTPException(400, "Select exactly two most and two least interesting topics")
+    if len(data.most_topics) != 1 or len(data.least_topics) != 1: raise HTTPException(400, "Select exactly one most and one least interesting topic")
     if set(data.most_topics) & set(data.least_topics): raise HTTPException(400, "Least interesting topics cannot include selected most interesting topics")
     with connect() as conn:
         conn.execute("UPDATE progress SET most_topics_json=?, least_topics_json=? WHERE participant_id=?", (jdump(data.most_topics), jdump(data.least_topics), data.participant_id)); conn.commit()
@@ -1997,7 +1955,7 @@ def chat_send(data: ChatIn):
 
 @app.post("/api/finish/{participant_id}")
 def finish(participant_id: str):
-    """Advance after a completed conversation; questionnaires are required only after each 4-conversation block."""
+    """Advance after a completed conversation; questionnaires are required only after each 2-conversation block."""
     pending_block = pending_condition_questionnaire(participant_id)
     if pending_block:
         set_step(participant_id, "post", completed=0)

@@ -783,7 +783,6 @@ function renderInstructions() {
 
       <section class="instruction-card highlight">
         <h3>Completing the study</h3>
-        <p>You have <strong>up to two weeks</strong> from receiving your participant code to complete the study.</p>
         <p>Your progress is saved automatically after each step.</p>
         <ul>
           <li>You may leave the study at any time.</li>

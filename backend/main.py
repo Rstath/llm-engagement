@@ -1534,33 +1534,6 @@ def paired_by_participant(rows: List[Dict[str, Any]], condition_key: str, a: Any
     return {"x": xs, "y": ys}
 
 
-def friedman_test_by_participant(rows: List[Dict[str, Any]], condition_key: str, metric_key: str) -> Dict[str, Any]:
-    labels = sorted({str(r.get(condition_key)) for r in rows if r.get(metric_key) is not None})
-    if len(labels) < 3:
-        return {"test": "Friedman", "n": 0, "k": len(labels), "statistic": None, "p": None, "note": "need at least 3 repeated conditions"}
-    by_pid: Dict[str, Dict[str, List[float]]] = {}
-    for r in rows:
-        if r.get(metric_key) is None:
-            continue
-        by_pid.setdefault(str(r.get("participant_id")), {}).setdefault(str(r.get(condition_key)), []).append(float(r[metric_key]))
-    complete = []
-    for vals in by_pid.values():
-        if all(label in vals for label in labels):
-            complete.append([sum(vals[label]) / len(vals[label]) for label in labels])
-    n = len(complete)
-    k = len(labels)
-    if n < 2:
-        return {"test": "Friedman", "n": n, "k": k, "statistic": None, "p": None, "note": "need at least 2 participants with all repeated conditions"}
-    rank_sums = [0.0] * k
-    for row in complete:
-        ranks = rank_values(row)
-        for i, rank in enumerate(ranks):
-            rank_sums[i] += rank
-    chi2 = (12 / (n * k * (k + 1))) * sum(rs * rs for rs in rank_sums) - 3 * n * (k + 1)
-    p = chi_square_sf_approx(chi2, k - 1)
-    return {"test": "Friedman", "n": n, "k": k, "conditions": labels, "statistic": round(chi2, 4), "p": p}
-
-
 def histogram(values: List[float], bins: int = 10, lo: float = 0.0, hi: float = 1.0) -> List[Dict[str, Any]]:
     counts = [0] * bins
     for v in values:
@@ -1630,7 +1603,6 @@ def compute_research_statistics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             "model_medium_vs_small_engagement": wilcoxon_signed_rank(model_pair["x"], model_pair["y"]),
             "context_vs_no_context_engagement": wilcoxon_signed_rank(context_pair["x"], context_pair["y"]),
             "topic_interest_high_vs_low_engagement": wilcoxon_signed_rank(interest_pair["x"], interest_pair["y"]),
-            "topic_effect_engagement": friedman_test_by_participant(rows, "topic_id", "engagement_score"),
         },
         "distributions": {
             "engagement_histogram": histogram([r.get("engagement_score") for r in rows if r.get("engagement_score") is not None]),

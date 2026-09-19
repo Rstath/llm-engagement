@@ -2145,11 +2145,10 @@ def overview():
 def researcher_metrics():
     init_db()
 
+    # Production dashboard is intentionally read-only for semantic metrics.
+    # Heavy Sentence-Transformer inference is performed by local_final_analysis.py,
+    # not on the 512 MB Render web service. Existing stored metrics are preliminary.
     metrics_error = None
-    try:
-        compute_all_completed_metrics()
-    except Exception as e:
-        metrics_error = str(e)
 
     with connect() as conn:
         rows = [dict(r) for r in conn.execute("""
@@ -2176,7 +2175,8 @@ def researcher_metrics():
     expected_conversations = participant_count * max(1, len(rows) // max(1, participant_count)) if rows else participant_count
 
     summary = {
-        "embedding_model": EMBEDDING_MODEL_NAME if get_embedding_model() else "hash-fallback-no-sentence-transformers",
+        "embedding_model": "preliminary-server-metrics (final embeddings computed locally)",
+        "metrics_status": "preliminary",
         "metrics_error": metrics_error,
         "participants": participant_count,
         "completed_participants": completed_participants,
@@ -2223,6 +2223,84 @@ def participant_detail(participant_id: str):
         design_row = conn.execute("SELECT * FROM participant_experiment_design WHERE participant_id=?", (participant_id,)).fetchone()
         questionnaires = [dict(r) for r in conn.execute("SELECT * FROM condition_block_questionnaires WHERE participant_id=? ORDER BY condition_order ASC", (participant_id,)).fetchall()]
     return {"progress": get_progress(participant_id), "assignment": assignment, "assignments": assignments, "design": dict(design_row) if design_row else None, "condition_questionnaires": questionnaires, "transcript": load_transcript(participant_id, session_id)}
+
+
+def _csv_response(filename: str, headers: List[str], rows: List[Any]):
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(headers)
+    for row in rows:
+        writer.writerow([row[h] if row[h] is not None else "" for h in headers])
+    return Response(out.getvalue(), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+def _export_table(table: str, filename: str, order_by: str = ""):
+    init_db()
+    with connect() as conn:
+        headers = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        sql = f"SELECT * FROM {table}" + (f" ORDER BY {order_by}" if order_by else "")
+        rows = conn.execute(sql).fetchall()
+    return _csv_response(filename, headers, rows)
+
+
+@app.get("/api/researcher/export/participants.csv", dependencies=[Depends(require_researcher)])
+def export_participants_csv():
+    init_db()
+    with connect() as conn:
+        rows = conn.execute("""
+            SELECT p.participant_id, ac.access_code, p.created_at, p.updated_at, p.current_step, p.completed,
+                   ac.used_at, ac.last_login_at, ac.is_active,
+                   pr.consent_json, pr.pre_json, pr.big5_answers_json, pr.big5_scores_json,
+                   pr.most_topics_json, pr.least_topics_json, pr.post_json
+            FROM participants p
+            LEFT JOIN participant_access_codes ac ON p.participant_id=ac.participant_id
+            LEFT JOIN progress pr ON p.participant_id=pr.participant_id
+            ORDER BY p.created_at ASC
+        """).fetchall()
+        headers = [d[0] for d in conn.execute("""
+            SELECT p.participant_id, ac.access_code, p.created_at, p.updated_at, p.current_step, p.completed,
+                   ac.used_at, ac.last_login_at, ac.is_active,
+                   pr.consent_json, pr.pre_json, pr.big5_answers_json, pr.big5_scores_json,
+                   pr.most_topics_json, pr.least_topics_json, pr.post_json
+            FROM participants p LEFT JOIN participant_access_codes ac ON p.participant_id=ac.participant_id
+            LEFT JOIN progress pr ON p.participant_id=pr.participant_id LIMIT 0
+        """).description]
+    return _csv_response("participants_progress.csv", headers, rows)
+
+
+@app.get("/api/researcher/export/assignments.csv", dependencies=[Depends(require_researcher)])
+def export_assignments_csv():
+    return _export_table("conversation_assignments", "assignments_design.csv", "participant_id, conversation_order")
+
+
+@app.get("/api/researcher/export/design.csv", dependencies=[Depends(require_researcher)])
+def export_design_csv():
+    return _export_table("participant_experiment_design", "latin_square_design.csv", "participant_id")
+
+
+@app.get("/api/researcher/export/turns.csv", dependencies=[Depends(require_researcher)])
+def export_turns_csv():
+    return _export_table("conversation_turns", "conversation_turns.csv", "participant_id, session_id, turn_index")
+
+
+@app.get("/api/researcher/export/questionnaires.csv", dependencies=[Depends(require_researcher)])
+def export_questionnaires_csv():
+    return _export_table("condition_block_questionnaires", "condition_questionnaires.csv", "participant_id, condition_order")
+
+
+@app.get("/api/researcher/export/session-questionnaires.csv", dependencies=[Depends(require_researcher)])
+def export_session_questionnaires_csv():
+    return _export_table("conversation_session_questionnaires", "session_questionnaires.csv", "participant_id, session_id")
+
+
+@app.get("/api/researcher/export/session-metrics.csv", dependencies=[Depends(require_researcher)])
+def export_session_metrics_csv():
+    return _export_table("conversation_session_metrics", "preliminary_session_metrics.csv", "participant_id, session_id")
+
+
+@app.get("/api/researcher/export/turn-metrics.csv", dependencies=[Depends(require_researcher)])
+def export_turn_metrics_csv():
+    return _export_table("conversation_turn_metrics", "preliminary_turn_metrics.csv", "participant_id, session_id, turn_index")
 
 
 @app.get("/api/researcher/export.csv", dependencies=[Depends(require_researcher)])

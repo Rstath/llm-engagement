@@ -1658,7 +1658,8 @@ async function renderResearcherDashboard(err = '') {
     <p class="muted">All generated participant codes are stored on the server and remain visible here. New codes are appended to this list.</p>
     ${accessCodesTable()}
     ${s.metrics_error ? `<div class="dashboard-note"><strong>Metrics warning:</strong> ${htmlEscape(s.metrics_error)}</div>` : ''}
-    <p class="muted">Embedding model: ${htmlEscape(s.embedding_model || 'not computed yet')}</p>
+    <div class="dashboard-note"><strong>Preliminary server metrics.</strong> The 512 MB production server does not run Sentence-Transformers. Final thesis embeddings and statistics must be computed offline with <code>local_final_analysis.py</code> using <code>sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2</code>.</div>
+    <p class="muted">Metrics status: preliminary · Final embedding model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 (offline)</p>
 
     <div class="dashboard-tabs">
       <button type="button" class="dashboard-tab active" data-tab="overview">Overview</button>
@@ -1673,7 +1674,7 @@ async function renderResearcherDashboard(err = '') {
       <div class="metrics-grid">
         ${metricCard('Participants', String(s.participants || data.participants.length || 0))}
         ${metricCard('Latin-square assigned', `${lsSummary.assigned_total || 0} / ${lsSummary.target_total || 16}`, lsSummary.currently_balanced ? 'Balanced so far' : 'Check allocation')}
-        ${metricCard('Target per sequence', String(lsSummary.target_per_sequence || 3), lsSummary.complete_and_balanced ? '16/16 perfectly balanced' : '8 sequences total')}
+        ${metricCard('Target per sequence', String(lsSummary.target_per_sequence || 2), lsSummary.complete_and_balanced ? '16/16 perfectly balanced' : '8 sequences total')}
         ${metricCard('Completed participants', String(s.completed_participants || 0), pct(s.participant_completion_rate || 0))}
         ${metricCard('Scored conversations', String(s.total_scored_conversations || 0))}
         ${metricCard('Engagement score', dec(s.avg_engagement_score), 'Weighted overall metric')}
@@ -1683,7 +1684,7 @@ async function renderResearcherDashboard(err = '') {
         ${metricCard('Question rate', dec(s.avg_question_rate), 'Question-bearing turns')}
       </div>
       <h3>Latin Square Balance</h3>
-      <div class="dashboard-note"><strong>${lsSummary.currently_balanced ? 'Balanced allocation in progress.' : 'Allocation warning.'}</strong> Each of the 8 sequences must reach exactly 3 assigned participants when all 16 participants have entered the experiment.</div>
+      <div class="dashboard-note"><strong>${lsSummary.currently_balanced ? 'Balanced allocation in progress.' : 'Allocation warning.'}</strong> Each of the 8 sequences must reach exactly 2 assigned participants when all 16 participants have entered the experiment.</div>
       ${latinSquareBalanceTable()}
       <div class="charts-grid">
         ${groupedMetricTable('Model comparison', m.model_metrics)}
@@ -1728,12 +1729,12 @@ async function renderResearcherDashboard(err = '') {
     <section class="tab-panel" id="tab-embeddings">
       <h3>Embedding analysis</h3>
       <div class="metrics-grid">
-        ${metricCard('Embedding model', s.embedding_model || 'not computed yet', 'Sentence-transformers or hash fallback')}
+        ${metricCard('Server metrics', 'Preliminary', 'Final Sentence-Transformer analysis runs offline')}
         ${metricCard('Windowed coherence', dec(s.avg_windowed_coherence), 'Similarity to recent context')}
         ${metricCard('Topic consistency', dec(s.avg_topic_consistency), 'Similarity to initial prompt')}
         ${metricCard('Novelty', dec(s.avg_novelty), 'Semantic distance from previous turn')}
       </div>
-      <div class="dashboard-note">The backend stores utterance and topic embeddings in the metrics tables. UMAP/t-SNE projections can be added later if you enable heavier scientific packages on the server.</div>
+      <div class="dashboard-note">These server values are preliminary and are not the final semantic analysis. Export the raw data and run the supplied local analysis script for the thesis. Final semantic measures are embedding-based operational proxies, not direct measurements of human engagement.</div>
       <div class="charts-grid">
         ${barChart('Topic consistency by topic', c.topic_consistency_by_topic, 'Average prompt similarity')}
         ${barChart('Conversations by topic', c.conversations_by_topic, 'Completed scored conversations')}
@@ -1744,7 +1745,18 @@ async function renderResearcherDashboard(err = '') {
       <h3>Participants</h3>
       <div class="table-wrap"><table><thead><tr><th>Participant</th><th>Access code</th><th>Created</th><th>Last progress update</th><th>Step</th><th>Completed</th></tr></thead><tbody>${data.participants.map(p => `<tr><td>${htmlEscape(p.participant_id)}</td><td><strong>${htmlEscape(p.access_code || '')}</strong></td><td>${htmlEscape(p.created_at)}</td><td>${htmlEscape(p.updated_at || '—')}</td><td>${htmlEscape(p.current_step)}</td><td>${p.completed ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table></div>
       <h3>Exports</h3>
-      <p class="muted">The CSV export includes Latin-square sequence and condition metadata, post-condition questionnaire answers, conversation transcripts, turn metrics, embedding-derived similarities, and conversation-level engagement scores.</p>
+      <p class="muted">Download raw tables separately for SPSS/Python and keep the joined all-data export as a backup. Stored server metric exports are preliminary; final Sentence-Transformer metrics are computed offline.</p>
+      <div class="actions export-actions">
+        <button type="button" class="csv-export" data-path="/api/researcher/export/participants.csv" data-name="participants_progress.csv">Participants & progress CSV</button>
+        <button type="button" class="csv-export" data-path="/api/researcher/export/design.csv" data-name="latin_square_design.csv">Latin-square design CSV</button>
+        <button type="button" class="csv-export" data-path="/api/researcher/export/assignments.csv" data-name="assignments_design.csv">Assignments CSV</button>
+        <button type="button" class="csv-export" data-path="/api/researcher/export/turns.csv" data-name="conversation_turns.csv">Turns / transcripts CSV</button>
+        <button type="button" class="csv-export" data-path="/api/researcher/export/questionnaires.csv" data-name="condition_questionnaires.csv">Condition questionnaires CSV</button>
+        <button type="button" class="csv-export" data-path="/api/researcher/export/session-questionnaires.csv" data-name="session_questionnaires.csv">Session questionnaires CSV</button>
+        <button type="button" class="csv-export" data-path="/api/researcher/export/session-metrics.csv" data-name="preliminary_session_metrics.csv">Preliminary session metrics CSV</button>
+        <button type="button" class="csv-export" data-path="/api/researcher/export/turn-metrics.csv" data-name="preliminary_turn_metrics.csv">Preliminary turn metrics CSV</button>
+        <button type="button" class="csv-export" data-path="/api/researcher/export.csv" data-name="llm_engagement_export.csv">All data joined CSV</button>
+      </div>
     </section>`;
 
   document.querySelectorAll('.dashboard-tab').forEach(tab => {
@@ -1788,27 +1800,23 @@ async function renderResearcherDashboard(err = '') {
     }
   };
 
+  async function downloadResearcherCsv(path, filename) {
+    const res = await fetch(`${API}${path}`, { headers: { Authorization: `Bearer ${localStorage.getItem('researcher_token') || ''}` } });
+    if (!res.ok) throw new Error(await res.text());
+    const blob = await res.blob(); const url = URL.createObjectURL(blob); const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
+  }
+
   document.getElementById('exportLink').onclick = async (ev) => {
     ev.preventDefault();
-
-    const res = await fetch(`${API}/api/researcher/export.csv`, {
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem('researcher_token') || ''}`
-      }
-    });
-
-    if (!res.ok) {
-      throw new Error(await res.text());
-    }
-
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'llm_engagement_export.csv';
-    a.click();
-    URL.revokeObjectURL(url);
+    try { await downloadResearcherCsv('/api/researcher/export.csv', 'llm_engagement_export.csv'); } catch (e) { alert(`Export failed: ${e.message}`); }
   };
+
+  document.querySelectorAll('.csv-export').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try { await downloadResearcherCsv(btn.dataset.path, btn.dataset.name); } catch (e) { alert(`Export failed: ${e.message}`); }
+    });
+  });
 }
 window.addEventListener('hashchange', route);
 

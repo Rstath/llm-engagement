@@ -666,7 +666,7 @@ function route() {
 function renderConsent() {
   app.innerHTML = `<div class="preview-document pdf-document consent-document">
     <h1>Informed Consent for Study Participation</h1>
-    <p>You are invited to take part in the online study "Using Large Language Models in the evaluation process of input methods for mobile devices". The study is conducted by Roumpini Stathopoulou and overseen by Andreas Komninos at University of Patras. We expect about 24 participants. Data collection is planned from 2026-07-01 to 2026-09-30. Key points:</p>
+    <p>You are invited to take part in the online study "Using Large Language Models in the evaluation process of input methods for mobile devices". The study is conducted by Roumpini Stathopoulou and overseen by Andreas Komninos at University of Patras. We expect about 16 participants. Data collection is planned from 2026-07-01 to 2026-09-30. Key points:</p>
     <ul class="intro-list">
       <li>Participation is voluntary. You may stop at any time without penalty or withdraw your consent</li>
       <li>One session of the online study takes about 60 minutes</li>
@@ -1672,8 +1672,8 @@ async function renderResearcherDashboard(err = '') {
       <h3>Overview</h3>
       <div class="metrics-grid">
         ${metricCard('Participants', String(s.participants || data.participants.length || 0))}
-        ${metricCard('Latin-square assigned', `${lsSummary.assigned_total || 0} / ${lsSummary.target_total || 24}`, lsSummary.currently_balanced ? 'Balanced so far' : 'Check allocation')}
-        ${metricCard('Target per sequence', String(lsSummary.target_per_sequence || 3), lsSummary.complete_and_balanced ? '24/24 perfectly balanced' : '8 sequences total')}
+        ${metricCard('Latin-square assigned', `${lsSummary.assigned_total || 0} / ${lsSummary.target_total || 16}`, lsSummary.currently_balanced ? 'Balanced so far' : 'Check allocation')}
+        ${metricCard('Target per sequence', String(lsSummary.target_per_sequence || 3), lsSummary.complete_and_balanced ? '16/16 perfectly balanced' : '8 sequences total')}
         ${metricCard('Completed participants', String(s.completed_participants || 0), pct(s.participant_completion_rate || 0))}
         ${metricCard('Scored conversations', String(s.total_scored_conversations || 0))}
         ${metricCard('Engagement score', dec(s.avg_engagement_score), 'Weighted overall metric')}
@@ -1683,7 +1683,7 @@ async function renderResearcherDashboard(err = '') {
         ${metricCard('Question rate', dec(s.avg_question_rate), 'Question-bearing turns')}
       </div>
       <h3>Latin Square Balance</h3>
-      <div class="dashboard-note"><strong>${lsSummary.currently_balanced ? 'Balanced allocation in progress.' : 'Allocation warning.'}</strong> Each of the 8 sequences must reach exactly 3 assigned participants when all 24 participants have entered the experiment.</div>
+      <div class="dashboard-note"><strong>${lsSummary.currently_balanced ? 'Balanced allocation in progress.' : 'Allocation warning.'}</strong> Each of the 8 sequences must reach exactly 3 assigned participants when all 16 participants have entered the experiment.</div>
       ${latinSquareBalanceTable()}
       <div class="charts-grid">
         ${groupedMetricTable('Model comparison', m.model_metrics)}

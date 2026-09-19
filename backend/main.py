@@ -2114,9 +2114,9 @@ def overview():
                 "sequence": seq_no,
                 "order": list(order),
                 "assigned": count,
-                "target": 3,
-                "remaining": max(0, 3 - count),
-                "balanced_at_target": count == 3,
+                "target": 2,
+                "remaining": max(0, 2 - count),
+                "balanced_at_target": count == 2,
             })
 
         assigned_total = sum(ls_counts.values())
@@ -2132,10 +2132,10 @@ def overview():
         "latin_square_balance": latin_square_balance,
         "latin_square_summary": {
             "assigned_total": assigned_total,
-            "target_total": 24,
-            "target_per_sequence": 3,
+            "target_total": 16,
+            "target_per_sequence": 2,
             "currently_balanced": balance_ok,
-            "complete_and_balanced": assigned_total == 24 and all(v == 3 for v in balance_counts),
+            "complete_and_balanced": assigned_total == 16 and all(v == 2 for v in balance_counts),
         },
     }
 

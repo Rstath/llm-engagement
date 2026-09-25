@@ -12,11 +12,11 @@ This version is intentionally simple:
 Use these first:
 
 ```env
-SMALL_LLM_MODEL=google/gemma-3-4b-it
-MEDIUM_LLM_MODEL=google/gemma-4-31b-it
+SMALL_LLM_MODEL=lmstudio-community/gemma-3-4B-it-QAT-GGUF
+MEDIUM_LLM_MODEL=lmstudio-community/gemma-3-27B-it-qat-GGUF
 ```
 
-OpenRouter lists `google/gemma-3-4b-it` for the small E4B-class condition. Use an OpenRouter model ID that is currently available for the medium condition; this package defaults to `google/gemma-4-31b-it`.
+OpenRouter lists `lmstudio-community/gemma-3-4B-it-QAT-GGUF` for the small E4B-class condition. Use an OpenRouter model ID that is currently available for the medium condition; this package defaults to `lmstudio-community/gemma-3-27B-it-qat-GGUF`.
 
 ---
 
@@ -76,8 +76,8 @@ LLM_BASE_URL=https://openrouter.ai/api/v1
 LLM_API_KEY=your_openrouter_api_key
 OPENROUTER_SITE_URL=https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPO_NAME/
 OPENROUTER_APP_NAME=LLM Engagement Study
-SMALL_LLM_MODEL=google/gemma-3-4b-it
-MEDIUM_LLM_MODEL=google/gemma-4-31b-it
+SMALL_LLM_MODEL=lmstudio-community/gemma-3-4B-it-QAT-GGUF
+MEDIUM_LLM_MODEL=lmstudio-community/gemma-3-27B-it-qat-GGUF
 DEFAULT_TEMPERATURE=0.7
 DEFAULT_MAX_AGENT_TOKENS=130
 TARGET_TOTAL_TURNS=12

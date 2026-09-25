@@ -1,0 +1,16 @@
+THESIS FIGURE CAPTIONS AND STATISTICAL SUMMARIES
+================================================
+
+Primary analysis unit: participant for paired inferential comparisons.
+Conversation rows are used descriptively for embedding-derived component summaries.
+Embedding model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+
+Figure 1. Participant-level paired engagement scores. Medium M=0.5937; Small M=0.5830. Paired mean difference (Medium − Small)=0.0107, bootstrap 95% CI [0.0038, 0.0170]. Wilcoxon W=19.000. p = .009. Rank-biserial effect=0.721. Thin lines represent individual participants; the heavier line represents the group mean ± SE.
+
+Figure 2. Participant-level paired engagement scores. Context M=0.5879; No context M=0.5887. Paired mean difference (Context − No context)=-0.0008, bootstrap 95% CI [-0.0037, 0.0019]. Wilcoxon W=60.000. p = .706. Rank-biserial effect=-0.118. Thin lines represent individual participants; the heavier line represents the group mean ± SE.
+
+Figure 3. Participant-level paired engagement scores. High interest M=0.5869; Low interest M=0.5897. Paired mean difference (High interest − Low interest)=-0.0028, bootstrap 95% CI [-0.0071, 0.0018]. Wilcoxon W=41.000. p = .175. Rank-biserial effect=-0.397. Thin lines represent individual participants; the heavier line represents the group mean ± SE.
+
+Figure 4. Exploratory relationship between Agreeableness and the participant-level personalization effect (mean engagement with personality context minus mean engagement without context), n=16, Spearman ρ=0.589, p = .016. Positive values indicate greater engagement under personality-aware context. The fitted line is descriptive; inference is based on Spearman rank correlation.
+
+Figure 5. Descriptive means of the embedding-derived conversation components across 256 conversations: Coherence M=0.668; Windowed coherence M=0.699; Topic consistency M=0.595; Novelty M=0.332; Question rate M=0.127. Error bars represent SE. Turn balance is intentionally omitted because it is invariant (1.000) and therefore does not discriminate between conversations. These semantic measures are operational embedding-based proxies rather than direct human engagement measures.

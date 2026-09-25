@@ -1,0 +1,9 @@
+Embedding model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+Window size: 3
+Cosine similarities transformed from [-1,1] to [0,1].
+Semantic measures are embedding-based operational proxies, not direct human engagement measures.
+Primary tests use participant-level paired means (Wilcoxon signed-rank). Conversation rows are not treated as independent participants.
+Big Five analyses use Spearman correlations and are exploratory.
+Individual-topic effects should be treated as exploratory because topic IDs are not equally represented within participants.
+Primary composite: .25 coherence + .20 windowed coherence + .20 topic consistency + .15 novelty + .10 turn balance + .10 question rate.
+Sensitivity composite removes turn balance and renormalizes the remaining weights by dividing by .90.

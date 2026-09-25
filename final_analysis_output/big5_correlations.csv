@@ -1,0 +1,6 @@
+trait,outcome,n,spearman_rho,p
+Extraversion,personalization_delta,16,0.19822832236366944,0.46176383342375155
+Agreeableness,personalization_delta,16,0.5886037050843033,0.016455367721105375
+Conscientiousness,personalization_delta,16,0.24188895802109375,0.36674979887282305
+Neuroticism,personalization_delta,16,-0.2010374282274105,0.4553095498799371
+Openness,personalization_delta,16,0.19393472524040672,0.4717158460677908

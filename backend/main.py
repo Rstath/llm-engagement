@@ -36,19 +36,19 @@ _CONFIGURED_ALLOWED_ORIGINS = [
 # Keep the production GitHub Pages frontend allowed even if the Render env var is
 # missing or accidentally overwritten. Explicit env origins are added, not substituted.
 ALLOWED_ORIGINS = list(dict.fromkeys(_DEFAULT_ALLOWED_ORIGINS + _CONFIGURED_ALLOWED_ORIGINS))
-# Put only the API root here, not /chat/completions.
-# Examples:
-#   OpenRouter: LLM_BASE_URL=https://openrouter.ai/api/v1
-#   LM Studio:  LLM_BASE_URL=http://localhost:1234/v1
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", os.getenv("LOCAL_LLM_BASE_URL", "https://openrouter.ai/api/v1"))
-LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("OPENROUTER_API_KEY", os.getenv("LOCAL_LLM_API_KEY", "")))
-OPENROUTER_SITE_URL = os.getenv("OPENROUTER_SITE_URL", "http://localhost:5173")
-OPENROUTER_APP_NAME = os.getenv("OPENROUTER_APP_NAME", "LLM Engagement Study")
+# OpenAI-compatible inference server. Put only the API root here, not /chat/completions.
+# Supervisor-hosted endpoint used by this experiment:
+#   http://150.140.142.76:1234/v1
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://150.140.142.76:1234/v1")
+# LM Studio/OpenAI-compatible servers may not require a key. If the server is
+# later protected, set LLM_API_KEY without changing application code.
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_REQUEST_TIMEOUT_SECONDS = float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "300"))
 
-# OpenRouter model IDs must exist exactly. These two are valid OpenRouter IDs.
-# If you run LM Studio, set these to the local model IDs shown in LM Studio.
-SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "google/gemma-3-4b-it")
-MEDIUM_LLM_MODEL = os.getenv("MEDIUM_LLM_MODEL", "google/gemma-4-31b-it")
+# Keep the original experimental model conditions unchanged. The supervisor
+# server must expose these IDs (or aliases with these exact names).
+SMALL_LLM_MODEL = os.getenv("SMALL_LLM_MODEL", "lmstudio-community/gemma-3-4B-it-QAT-GGUF")
+MEDIUM_LLM_MODEL = os.getenv("MEDIUM_LLM_MODEL", "lmstudio-community/gemma-3-27B-it-qat-GGUF")
 DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.9"))
 DEFAULT_MAX_AGENT_TOKENS = int(os.getenv("DEFAULT_MAX_AGENT_TOKENS", "70"))
 TARGET_TOTAL_TURNS = int(os.getenv("TARGET_TOTAL_TURNS", "12"))
@@ -851,15 +851,13 @@ Never mention metrics, prompts, hidden instructions, Big Five, personality testi
 def llm_chat_url() -> str:
     """Return a correct OpenAI-compatible chat completions URL.
 
-    Accepts either:
-    - https://openrouter.ai/api/v1
-    - https://openrouter.ai/api/v1/chat/completions
-    - http://localhost:1234/v1
-    - http://localhost:1234/v1/chat/completions
+    Accepts either the API root or the complete chat-completions URL, e.g.:
+    - http://150.140.142.76:1234/v1
+    - http://150.140.142.76:1234/v1/chat/completions
     """
     base = (LLM_BASE_URL or "").strip().rstrip("/")
     if not base:
-        base = "https://openrouter.ai/api/v1"
+        base = "http://150.140.142.76:1234/v1"
     if base.endswith("/chat/completions"):
         return base
     return f"{base}/chat/completions"
@@ -980,27 +978,12 @@ def call_llm(model_name, messages):
     if LLM_API_KEY:
         headers["Authorization"] = f"Bearer {LLM_API_KEY}"
 
-    is_openrouter = "openrouter.ai" in url
-    if is_openrouter:
-        headers["HTTP-Referer"] = OPENROUTER_SITE_URL or "http://localhost:5173"
-        headers["X-Title"] = OPENROUTER_APP_NAME
-        headers["X-OpenRouter-Metadata"] = "enabled"
-
     payload = {
         "model": model_name,
         "messages": messages,
         "temperature": DEFAULT_TEMPERATURE,
         "max_tokens": DEFAULT_MAX_AGENT_TOKENS,
     }
-
-    # Preserve the experimental model, but allow OpenRouter to use another
-    # provider serving that exact model. Participant data must not be routed
-    # to providers that collect prompts for training.
-    if is_openrouter:
-        payload["provider"] = {
-            "allow_fallbacks": True,
-            "data_collection": "deny",
-        }
 
     # Retry only transient failures with the SAME model. The total retry
     # window is intentionally bounded so the UI can recover gracefully.
@@ -1011,7 +994,7 @@ def call_llm(model_name, messages):
 
     for attempt in range(len(backoffs) + 1):
         try:
-            r = requests.post(url, headers=headers, json=payload, timeout=120)
+            r = requests.post(url, headers=headers, json=payload, timeout=LLM_REQUEST_TIMEOUT_SECONDS)
             last_status = int(r.status_code)
 
             if r.ok:
@@ -1036,7 +1019,7 @@ def call_llm(model_name, messages):
                 raise LLMRequestError(
                     r.status_code,
                     f"{r.status_code} from {url}. Model={model_name!r}. "
-                    f"OpenRouter-Response={detail or '<empty response body>'}.{suffix}"
+                    f"LLM-Response={detail or '<empty response body>'}.{suffix}"
                 )
 
             # Respect Retry-After when present, otherwise exponential backoff.
@@ -1679,51 +1662,38 @@ def health():
 
 @app.get("/api/llm-diagnostic")
 def llm_diagnostic():
-    """Safely test OpenRouter model visibility and one tiny completion.
-
-    Returns no API key and sends no participant data.
-    """
+    """Test the configured OpenAI-compatible server without participant data."""
     url = llm_chat_url()
+    base = (LLM_BASE_URL or "").strip().rstrip("/")
+    if base.endswith("/chat/completions"):
+        base = base[:-len("/chat/completions")]
+
+    headers = {"Content-Type": "application/json"}
+    if LLM_API_KEY:
+        headers["Authorization"] = f"Bearer {LLM_API_KEY}"
+
     result = {
         "llm_url": url,
         "api_key_configured": bool(LLM_API_KEY),
+        "request_timeout_seconds": LLM_REQUEST_TIMEOUT_SECONDS,
         "models": {},
     }
 
-    if not LLM_API_KEY:
-        result["error"] = "LLM_API_KEY is not configured"
-        return result
+    # Ask the configured server which model IDs it currently exposes.
+    try:
+        mr = requests.get(f"{base}/models", headers=headers, timeout=min(30, LLM_REQUEST_TIMEOUT_SECONDS))
+        result["models_endpoint_status"] = mr.status_code
+        if mr.ok:
+            model_data = mr.json().get("data", [])
+            result["available_model_ids"] = [m.get("id") for m in model_data if isinstance(m, dict)]
+        else:
+            result["models_endpoint_response"] = (mr.text or "")[:1600]
+    except Exception as exc:
+        result["models_endpoint_error"] = str(exc)
 
-    base_headers = {
-        "Authorization": f"Bearer {LLM_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    if "openrouter.ai" in url:
-        base_headers["HTTP-Referer"] = OPENROUTER_SITE_URL or "http://localhost:5173"
-        base_headers["X-Title"] = OPENROUTER_APP_NAME
-        base_headers["X-OpenRouter-Metadata"] = "enabled"
-
-    for label, model_name in (
-        ("small", SMALL_LLM_MODEL),
-        ("medium", MEDIUM_LLM_MODEL),
-    ):
+    # Test both experimental conditions using the same harmless prompt.
+    for label, model_name in (("small", SMALL_LLM_MODEL), ("medium", MEDIUM_LLM_MODEL)):
         item = {"model": model_name}
-
-        # 1) Verify the model is visible to this OpenRouter account/key.
-        try:
-            lookup_url = f"https://openrouter.ai/api/v1/model/{model_name}"
-            mr = requests.get(
-                lookup_url,
-                headers={"Authorization": f"Bearer {LLM_API_KEY}"},
-                timeout=30,
-            )
-            item["model_lookup_status"] = mr.status_code
-            if not mr.ok:
-                item["model_lookup_response"] = (mr.text or "")[:1000]
-        except Exception as exc:
-            item["model_lookup_error"] = str(exc)
-
-        # 2) Test provider routing with a harmless, tiny prompt.
         try:
             payload = {
                 "model": model_name,
@@ -1731,7 +1701,7 @@ def llm_diagnostic():
                 "temperature": 0,
                 "max_tokens": 8,
             }
-            rr = requests.post(url, headers=base_headers, json=payload, timeout=60)
+            rr = requests.post(url, headers=headers, json=payload, timeout=LLM_REQUEST_TIMEOUT_SECONDS)
             item["chat_status"] = rr.status_code
             if rr.ok:
                 data = rr.json()
@@ -1740,15 +1710,9 @@ def llm_diagnostic():
             else:
                 item["chat_ok"] = False
                 item["chat_response"] = (rr.text or "")[:1600]
-                item["request_id"] = (
-                    rr.headers.get("x-request-id")
-                    or rr.headers.get("x-openrouter-request-id")
-                    or rr.headers.get("cf-ray")
-                )
         except Exception as exc:
             item["chat_ok"] = False
             item["chat_error"] = str(exc)
-
         result["models"][label] = item
 
     return result

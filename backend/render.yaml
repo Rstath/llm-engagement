@@ -23,13 +23,11 @@ services:
       - key: ALLOWED_ORIGINS
         sync: false
       - key: LLM_BASE_URL
-        value: https://openrouter.ai/api/v1
+        value: http://150.140.142.76:1234/v1
       - key: LLM_API_KEY
         sync: false
-      - key: OPENROUTER_SITE_URL
-        sync: false
-      - key: OPENROUTER_APP_NAME
-        value: LLM Engagement Study
+      - key: LLM_REQUEST_TIMEOUT_SECONDS
+        value: 300
       - key: SMALL_LLM_MODEL
         sync: false
       - key: MEDIUM_LLM_MODEL

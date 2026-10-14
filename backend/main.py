@@ -1,4 +1,5 @@
 import csv
+import logging
 import hashlib
 import hmac
 import io
@@ -1891,6 +1892,10 @@ def chat_send(data: ChatIn):
         try:
             reply = make_reply(data.participant_id, assignment, transcript)
         except LLMRequestError as exc:
+            logging.getLogger(__name__).error(
+                "Chat LLM failure: upstream_status=%s error=%s",
+                exc.status_code, str(exc)[:700],
+            )
             # Do not let API failures become experimental turns. Roll back the
             # optimistic human turn so the participant can resend cleanly.
             delete_latest_human_turn(data.participant_id, session_id, text)
@@ -1905,7 +1910,8 @@ def chat_send(data: ChatIn):
     block_complete = False
     if conversation_done:
         mark_assignment_complete(session_id)
-        compute_and_store_session_metrics(session_id)
+        # Semantic metrics are computed offline after export. Do not load an
+        # embedding model or perform metric inference in the live chat request.
         block_progress = current_condition_progress(data.participant_id, int(assignment["condition_order"]))
         block_complete = block_progress["complete"] >= CONVERSATIONS_PER_CONDITION
         set_step(data.participant_id, "post" if block_complete else "chat", completed=0)

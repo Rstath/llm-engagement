@@ -1156,7 +1156,19 @@ def make_reply(pid, assignment, transcript):
         {"role": "user", "content": "Scenario context only, do not restate it: " + assignment["topic_prompt"] + "\n" + instruction},
     ]
     for t in transcript[-12:]:
-        messages.append({"role": "user" if t["speaker"] == "Human" else "assistant", "content": t["text"]})
+        role = "user" if t["speaker"] == "Human" else "assistant"
+        content = str(t["text"]).strip()
+
+        if not content:
+            continue
+
+        if messages[-1]["role"] == role:
+            messages[-1]["content"] += "\n" + content
+        else:
+            messages.append({
+                "role": role,
+                "content": content
+            })
     return call_llm(assignment["model_name"], messages)
 
 

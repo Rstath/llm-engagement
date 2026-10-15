@@ -25,6 +25,22 @@ def qflag(s):
 def tokens(s): return max(1, round(len(str(s or '').split())*1.3))
 def sim01(a,b): return float((np.dot(a,b)+1.0)/2.0)  # normalized embeddings
 
+
+# User-authored behavioral indicators for the literature-informed CEI.
+# Fixed heuristics; weights and thresholds are design choices, not validated UES weights.
+INITIATIVE_RE = re.compile(r"\b(because|however|although|but|also|actually|for example|for instance|i think|i feel|i prefer|i would|in my opinion|personally|my experience)\b", re.I)
+def user_behavior(turns):
+    h=turns[turns.speaker.astype(str).str.strip().str.lower().isin(['human','user','participant'])]
+    messages=h.text.fillna('').astype(str).tolist()
+    if not messages: return float('nan'),float('nan'),0
+    mean_words=float(np.mean([len(re.findall(r"\b[\w']+\b",s)) for s in messages]))
+    participation=float(1-np.exp(-mean_words/12.0))
+    initiative=float(np.mean([bool(qflag(s) or INITIATIVE_RE.search(s)) for s in messages]))
+    return participation,initiative,len(messages)
+def cei_score(coherence,windowed,topic,participation,initiative):
+    semantic=(coherence+windowed+topic)/3.0
+    return .40*semantic+.35*participation+.25*initiative
+
 def bootstrap_ci(x, reps=5000, seed=1059667):
     x=np.asarray(x,float); x=x[np.isfinite(x)]
     if len(x)==0:return (np.nan,np.nan)
@@ -68,13 +84,11 @@ def main():
         ht=sum(tokens(x) for x in humans.text); at=sum(tokens(x) for x in agents.text)
         coh=np.mean(prev) if prev else np.nan; wc=np.mean(win) if win else np.nan; tc=np.mean(tops) if tops else np.nan; novelty=np.mean(nov) if nov else np.nan
         tb=min(len(humans),len(agents))/max(1,max(len(humans),len(agents))); tokb=min(ht,at)/max(1,max(ht,at)); qr=np.mean([qflag(x) for x in tt.text])
-        # Primary thesis composite specified for the study. Novelty is the semantic distance proxy available in the stored design.
-        engagement=.25*coh+.20*wc+.20*tc+.15*novelty+.10*tb+.10*qr
-        # Sensitivity analysis removes the non-discriminating turn-balance component and renormalizes remaining weights to sum to 1.
-        sens=(.25*coh+.20*wc+.20*tc+.15*novelty+.10*qr)/.90
-        rows.append(dict(session_id=a.session_id,participant_id=a.participant_id,conversation_order=a.conversation_order,latin_square_sequence=a.latin_square_sequence,condition_code=a.condition_code,condition_order=a.condition_order,conversation_within_condition=a.conversation_within_condition,topic_id=a.topic_id,variation_id=a.variation_id,topic_preference=a.topic_preference,model_size=a.model_size,model_name=a.model_name,personality_context_enabled=int(a.personality_context_enabled),coherence=coh,windowed_coherence=wc,topic_consistency=tc,novelty=novelty,turn_balance=tb,token_balance=tokb,question_rate=qr,engagement_score=engagement,engagement_sensitivity_no_turn_balance=sens))
+        participation,initiative,user_turn_count=user_behavior(tt)
+        engagement=cei_score(coh,wc,tc,participation,initiative)
+        rows.append(dict(session_id=a.session_id,participant_id=a.participant_id,conversation_order=a.conversation_order,latin_square_sequence=a.latin_square_sequence,condition_code=a.condition_code,condition_order=a.condition_order,conversation_within_condition=a.conversation_within_condition,topic_id=a.topic_id,variation_id=a.variation_id,topic_preference=a.topic_preference,model_size=a.model_size,model_name=a.model_name,personality_context_enabled=int(a.personality_context_enabled),coherence=coh,windowed_coherence=wc,topic_consistency=tc,novelty=novelty,turn_balance=tb,token_balance=tokb,question_rate=qr,engagement_score=engagement,semantic_continuity=(coh+wc+tc)/3, user_participation=participation,user_initiative=initiative,user_turn_count=user_turn_count))
     S=pd.DataFrame(rows); S.to_csv(out/'final_session_metrics.csv',index=False)
-    metrics=['engagement_score','coherence','windowed_coherence','topic_consistency','novelty','turn_balance','token_balance','question_rate','engagement_sensitivity_no_turn_balance']
+    metrics=['engagement_score','semantic_continuity','user_participation','user_initiative','coherence','windowed_coherence','topic_consistency','novelty','turn_balance','token_balance','question_rate']
     desc=[]
     for m in metrics:
         x=S[m].dropna(); lo,hi=bootstrap_ci(x); desc.append(dict(metric=m,n=len(x),mean=x.mean(),median=x.median(),sd=x.std(ddof=1),ci95_low=lo,ci95_high=hi,min=x.min(),max=x.max()))
@@ -98,6 +112,6 @@ def main():
         z=D[[trait,'personalization_delta']].dropna(); rho,pv=spearmanr(z[trait],z.personalization_delta) if len(z)>=3 else (np.nan,np.nan)
         cor.append(dict(trait=trait,outcome='personalization_delta',n=len(z),spearman_rho=rho,p=pv))
     pd.DataFrame(cor).to_csv(out/'big5_correlations.csv',index=False)
-    (out/'analysis_metadata.txt').write_text(f'''Embedding model: {MODEL}\nWindow size: {WINDOW}\nCosine similarities transformed from [-1,1] to [0,1].\nSemantic measures are embedding-based operational proxies, not direct human engagement measures.\nPrimary tests use participant-level paired means (Wilcoxon signed-rank). Conversation rows are not treated as independent participants.\nBig Five analyses use Spearman correlations and are exploratory.\nIndividual-topic effects should be treated as exploratory because topic IDs are not equally represented within participants.\nPrimary composite: .25 coherence + .20 windowed coherence + .20 topic consistency + .15 novelty + .10 turn balance + .10 question rate.\nSensitivity composite removes turn balance and renormalizes the remaining weights by dividing by .90.\n''')
+    (out/'analysis_metadata.txt').write_text(f'''Embedding model: {MODEL}\nWindow size: {WINDOW}\nCosine similarities transformed from [-1,1] to [0,1].\nSemantic measures are embedding-based operational proxies, not direct human engagement measures.\nPrimary tests use participant-level paired means (Wilcoxon signed-rank). Conversation rows are not treated as independent participants.\nBig Five analyses use Spearman correlations and are exploratory.\nIndividual-topic effects should be treated as exploratory because topic IDs are not equally represented within participants.\nPrimary CEI: .40 * mean(coherence, windowed coherence, topic consistency) + .35 * (1-exp(-mean human message word count/12)) + .25 * fraction of human messages containing a question or a fixed elaboration marker. Weights and heuristics are analyst choices, not validated psychometric weights. This operationalization was selected after examining earlier results and must be disclosed as a post-hoc change.\n''')
     print(f'Wrote final analysis to {out.resolve()}')
 if __name__=='__main__': main()
